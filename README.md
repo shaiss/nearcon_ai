@@ -76,41 +76,58 @@ An AI-powered chat assistant for **NEARCON 2026** that runs on NEAR AI Cloud wit
 
 ## 🏗️ Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                           NEARCON.org Website                           │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │              Userscript (nearcon-chat.user.js)                   │   │
-│  │  • BYOK - User provides their own API key                       │   │
-│  │  • Model selector with persistence                               │   │
-│  │  • Direct NEAR AI API connection (GM_xmlhttpRequest)            │   │
-│  │  • TEE verification with expanded details                        │   │
-│  │  • Floating FAB toggle (bottom-right, hidden by default)        │   │
-│  └──────────────────────────┬──────────────────────────────────────┘   │
-└─────────────────────────────┼───────────────────────────────────────────┘
-                              │
-        ┌─────────────────────┴─────────────────────┐
-        │                                           │
-        ▼                                           ▼
-┌───────────────────────────┐         ┌───────────────────────────────────┐
-│   Context Backend Server   │         │      NEAR AI Cloud (Direct)       │
-│      (localhost:3000)      │         │                                   │
-│  ┌───────────────────┐    │         │  • Chat completions API           │
-│  │  context-loader.js │    │         │  • Model attestation API          │
-│  │  ┌─────────────┐  │    │         │  • Signature verification         │
-│  │  │ system-     │  │    │         │                                   │
-│  │  │ prompt.md   │  │    │         │  ┌───────────────────────────┐   │
-│  │  ├─────────────┤  │    │         │  │   Intel TDX + NVIDIA TEE  │   │
-│  │  │ event-      │  │    │         │  │   (Hardware Security)     │   │
-│  │  │ context.json│  │    │         │  └───────────────────────────┘   │
-│  │  ├─────────────┤  │    │         └───────────────────────────────────┘
-│  │  │ faqs.json   │  │    │
-│  │  └─────────────┘  │    │
-│  └───────────────────┘    │
-│                           │
-│  GET /api/context         │
-│  (System prompt + data)   │
-└───────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Website["🌐 NEARCON.org Website"]
+        subgraph Userscript["📜 Userscript (nearcon-chat.user.js)"]
+            BYOK["🔑 BYOK<br/>User's own API key"]
+            MODEL["🤖 Model Selector<br/>with persistence"]
+            FAB["💬 Floating FAB<br/>bottom-right, hidden by default"]
+            TEE_UI["✅ TEE Verification<br/>expanded details panel"]
+        end
+    end
+
+    subgraph Backend["📦 Context Backend Server (localhost:3000)"]
+        LOADER["context-loader.js"]
+        subgraph Data["📁 Data Files"]
+            PROMPT["system-prompt.md"]
+            EVENT["event-context.json"]
+            FAQS["faqs.json"]
+        end
+        API_CTX[/"GET /api/context<br/>(System prompt + data)"/]
+    end
+
+    subgraph NEARAI["☁️ NEAR AI Cloud (Direct Connection)"]
+        CHAT["💬 Chat Completions API"]
+        MODELS["📋 Models List API"]
+        ATTEST["🔐 Attestation API"]
+        SIG["✍️ Signature Verification"]
+        
+        subgraph TEE["🛡️ TEE Environment"]
+            TDX["Intel TDX<br/>CPU Isolation"]
+            GPU["NVIDIA H200<br/>GPU Security"]
+        end
+    end
+
+    %% Connections
+    Userscript -->|"Fetch Context"| API_CTX
+    LOADER --> Data
+    API_CTX --> LOADER
+    
+    Userscript -->|"GM_xmlhttpRequest<br/>(CORS Bypass)"| CHAT
+    Userscript -->|"Direct API"| MODELS
+    Userscript -->|"Direct API"| ATTEST
+    
+    CHAT --> TEE
+    ATTEST --> TEE
+
+    %% Styling
+    style Website fill:#fff3cd,stroke:#ffc107,stroke-width:2px
+    style Backend fill:#f8f9fa,stroke:#6c757d,stroke-width:2px
+    style NEARAI fill:#e7f3ff,stroke:#0ea5e9,stroke-width:2px
+    style TEE fill:#d4edda,stroke:#28a745,stroke-width:2px
+    style Userscript fill:#ffe8cc,stroke:#fd7e14
+    style Data fill:#e2e3e5,stroke:#6c757d
 ```
 
 ## 📁 Project Structure
