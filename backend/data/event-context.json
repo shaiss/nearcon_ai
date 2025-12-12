@@ -1,0 +1,57 @@
+{
+  "event": {
+    "name": "NEARCON 2026",
+    "tagline": "The Premier AI Industry Conference",
+    "dates": "February 23-24, 2026",
+    "theme": "Intelligence, Privacy, and the Open Web"
+  },
+  "venue": {
+    "name": "Fort Mason Center for Arts & Culture",
+    "city": "San Francisco",
+    "state": "California",
+    "country": "USA",
+    "adaCompliant": true,
+    "accessibility": "We are committed to providing an accessible and inclusive experience for all attendees."
+  },
+  "registration": {
+    "platform": "Luma",
+    "url": "nearcon.org",
+    "confirmation": "You will receive a confirmation when registered.",
+    "includes": "Access to all conference sessions and events.",
+    "badgePickup": "Badge pickup information will be provided closer to the event date."
+  },
+  "policies": {
+    "dressCode": {
+      "formal": false,
+      "description": "No formal dress code required. NEARCON is a conference and cultural gathering — wear what makes you comfortable.",
+      "sideEvents": "Some side events may have different dress expectations."
+    },
+    "photography": {
+      "personal": "Personal photography is welcome in public areas.",
+      "professional": "Professional video and livestreaming require written approval from the NEARCON Media Team.",
+      "release": "By registering for NEARCON, you agree that photographs and video taken at the event may be used by NEAR Foundation."
+    },
+    "privacy": {
+      "badgeInfo": "Your basic registration information (name, company, email) may be encoded in your badge.",
+      "sponsorScanning": "By allowing a sponsor to scan your badge, you consent to sharing this information with them."
+    },
+    "bags": "All bags are subject to security screening upon entry to Fort Mason Center and other official venues. Please allow extra time for security screening."
+  },
+  "logistics": {
+    "wifi": "Complimentary WiFi will be available to all registered attendees at Fort Mason Center.",
+    "security": "Venue security and staff will be present at all times. All attendees must have a valid badge to access event areas.",
+    "safety": "Safety is a top priority at NEARCON."
+  },
+  "press": {
+    "credentials": "Apply for press credentials through the press form on nearcon.org.",
+    "approval": "All applications are reviewed and approved by the NEARCON Media Team."
+  },
+  "contact": {
+    "website": "nearcon.org",
+    "contactPage": "nearcon.org/contact"
+  },
+  "agenda": {
+    "status": "coming_soon",
+    "note": "Speaker information and agenda details will be announced closer to the event. Check nearcon.org for the latest updates."
+  }
+}

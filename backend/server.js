@@ -1,8 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const { NearAIClient } = require('./nearai-client');
-const { getSystemPrompt } = require('./event-context');
+const contextLoader = require('./context-loader');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -10,186 +9,126 @@ const port = process.env.PORT || 3000;
 // Middleware
 app.use(express.json());
 
-// CORS configuration for nearcon.org
+// CORS configuration for nearcon.org and local development
 const corsOptions = {
-  origin: ['https://nearcon.org', 'http://localhost:3000'],
+  origin: ['https://nearcon.org', 'https://www.nearcon.org', 'http://localhost:3000', 'http://localhost:5500'],
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
 };
 app.use(cors(corsOptions));
 
-// Initialize NEAR AI client
-const apiKey = process.env.NEAR_AI_API_KEY;
-if (!apiKey) {
-  console.error('NEAR_AI_API_KEY environment variable is required');
-  process.exit(1);
-}
-
-const nearAIClient = new NearAIClient(apiKey);
-
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    lastDataUpdate: contextLoader.getLastUpdated()?.toISOString() || null
+  });
 });
 
-// Get available models
-app.get('/api/models', async (req, res) => {
+// Get server status and metadata
+app.get('/api/status', (req, res) => {
+  const lastUpdated = contextLoader.getLastUpdated();
+  const eventInfo = contextLoader.getEventInfo();
+
+  res.json({
+    status: 'ok',
+    lastUpdated: lastUpdated?.toISOString() || null,
+    lastUpdatedUnix: lastUpdated?.getTime() || null,
+    event: eventInfo,
+    version: '2.0.0'
+  });
+});
+
+// Get context for AI chat (system prompt + event context + FAQs)
+app.get('/api/context', (req, res) => {
   try {
-    const models = await nearAIClient.getModels();
-    res.json({ models });
-  } catch (error) {
-    console.error('Models error:', error);
-    // Return default models on error
+    const context = contextLoader.getContext();
+    const lastUpdated = contextLoader.getLastUpdated();
+    const eventInfo = contextLoader.getEventInfo();
+
     res.json({
-      models: [
-        { id: 'deepseek-ai/DeepSeek-V3.1', name: 'DeepSeek V3.1' },
-        { id: 'moonshotai/Kimi-K2-Thinking', name: 'Kimi K2 Thinking' },
-        { id: 'openai/gpt-oss-120b', name: 'GPT OSS 120B' },
-        { id: 'Qwen/Qwen3-30B-A3B-Instruct-2507', name: 'Qwen3 30B' },
-        { id: 'zai-org/GLM-4.6', name: 'GLM 4.6' }
-      ]
+      context,
+      systemMessage: contextLoader.getSystemMessage(),
+      lastUpdated: lastUpdated?.toISOString() || null,
+      lastUpdatedUnix: lastUpdated?.getTime() || null,
+      event: eventInfo
     });
-  }
-});
-
-// Get cached attestation for a model
-app.get('/api/attestation/:model(*)', async (req, res) => {
-  try {
-    // Decode the model name in case it contains URL-encoded characters
-    const model = decodeURIComponent(req.params.model);
-    const attestation = await nearAIClient.getCachedAttestation(model);
-    res.json(attestation);
   } catch (error) {
-    console.error('Attestation error:', error);
-    res.status(500).json({ error: 'Failed to get attestation', details: error.message });
+    console.error('Context error:', error);
+    res.status(500).json({ error: 'Failed to get context', details: error.message });
   }
 });
 
-// Verify a chat inference
-app.get('/api/verify/:chatId', async (req, res) => {
+// Get raw data (for debugging or advanced use)
+app.get('/api/context/raw', (req, res) => {
   try {
-    const { chatId } = req.params;
-    const { model, requestBody, responseBody } = req.query;
+    const rawData = contextLoader.getRawData();
+    const lastUpdated = contextLoader.getLastUpdated();
 
-    if (!model || !requestBody || !responseBody) {
-      return res.status(400).json({
-        error: 'Missing required parameters: model, requestBody, responseBody'
-      });
-    }
-
-    // Parse request body if it's a string
-    let parsedRequestBody;
-    let parsedResponseBody;
-
-    try {
-      parsedRequestBody = typeof requestBody === 'string' ? JSON.parse(requestBody) : requestBody;
-      parsedResponseBody = typeof responseBody === 'string' ? JSON.parse(responseBody) : responseBody;
-    } catch (parseError) {
-      return res.status(400).json({ error: 'Invalid JSON in requestBody or responseBody' });
-    }
-
-    const verification = await nearAIClient.verifyInference(
-      chatId,
-      model,
-      parsedRequestBody,
-      parsedResponseBody
-    );
-
-    res.json(verification);
+    res.json({
+      ...rawData,
+      lastUpdated: lastUpdated?.toISOString() || null
+    });
   } catch (error) {
-    console.error('Verification error:', error);
-    res.status(500).json({ error: 'Verification failed', details: error.message });
+    console.error('Raw context error:', error);
+    res.status(500).json({ error: 'Failed to get raw context', details: error.message });
   }
 });
 
-// Chat endpoint with streaming SSE
-app.post('/api/chat', async (req, res) => {
+// Reload context data (useful for hot reloading during development)
+app.post('/api/context/reload', (req, res) => {
   try {
-    const { messages, model = 'gpt-oss-120b', stream = true } = req.body;
+    const success = contextLoader.reload();
+    const lastUpdated = contextLoader.getLastUpdated();
 
-    if (!messages || !Array.isArray(messages)) {
-      return res.status(400).json({ error: 'Messages array is required' });
-    }
-
-    // Add system prompt for NEARCON context
-    const systemPrompt = getSystemPrompt();
-    const messagesWithContext = [systemPrompt, ...messages];
-
-    if (stream) {
-      // Set up SSE headers
-      res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-        'Access-Control-Allow-Origin': 'https://nearcon.org',
-        'Access-Control-Allow-Headers': 'Cache-Control'
-      });
-
-      // Send initial connection event
-      res.write('event: connected\n');
-      res.write('data: {"status": "connected"}\n\n');
-
-      let fullResponse = '';
-      let chatId = null;
-
-      try {
-        // Use streaming generator
-        const streamGenerator = nearAIClient.streamChat(messagesWithContext, model);
-
-        for await (const chunk of streamGenerator) {
-          fullResponse += chunk;
-
-          // Send chunk to client
-          res.write(`data: ${JSON.stringify({
-            type: 'chunk',
-            content: chunk,
-            timestamp: new Date().toISOString()
-          })}\n\n`);
-        }
-
-        // Make a non-streaming request to get the complete response with chat ID
-        const completeResponse = await nearAIClient.chat(messagesWithContext, model, { stream: false });
-        chatId = completeResponse.id;
-
-        // Send completion event with full response
-        res.write(`data: ${JSON.stringify({
-          type: 'complete',
-          chatId: chatId,
-          response: completeResponse,
-          timestamp: new Date().toISOString()
-        })}\n\n`);
-
-      } catch (streamError) {
-        console.error('Streaming error:', streamError);
-        res.write(`data: ${JSON.stringify({
-          type: 'error',
-          error: 'Streaming failed',
-          details: streamError.message
-        })}\n\n`);
-      } finally {
-        res.write('event: end\n');
-        res.write('data: [DONE]\n\n');
-        res.end();
-      }
-
-    } else {
-      // Non-streaming response
-      const response = await nearAIClient.chat(messagesWithContext, model, { stream: false });
-
+    if (success) {
       res.json({
-        chatId: response.id,
-        response,
-        timestamp: new Date().toISOString()
+        status: 'ok',
+        message: 'Context reloaded successfully',
+        lastUpdated: lastUpdated?.toISOString() || null
       });
+    } else {
+      res.status(500).json({ error: 'Failed to reload context' });
     }
-
   } catch (error) {
-    console.error('Chat error:', error);
-    res.status(500).json({
-      error: 'Chat request failed',
-      details: error.message
+    console.error('Reload error:', error);
+    res.status(500).json({ error: 'Failed to reload context', details: error.message });
+  }
+});
+
+// Get FAQs only
+app.get('/api/faqs', (req, res) => {
+  try {
+    const { faqs } = contextLoader.getRawData();
+    const lastUpdated = contextLoader.getLastUpdated();
+
+    res.json({
+      faqs,
+      lastUpdated: lastUpdated?.toISOString() || null
     });
+  } catch (error) {
+    console.error('FAQs error:', error);
+    res.status(500).json({ error: 'Failed to get FAQs', details: error.message });
+  }
+});
+
+// Get event info only
+app.get('/api/event', (req, res) => {
+  try {
+    const eventInfo = contextLoader.getEventInfo();
+    const { eventContext } = contextLoader.getRawData();
+    const lastUpdated = contextLoader.getLastUpdated();
+
+    res.json({
+      ...eventInfo,
+      details: eventContext,
+      lastUpdated: lastUpdated?.toISOString() || null
+    });
+  } catch (error) {
+    console.error('Event info error:', error);
+    res.status(500).json({ error: 'Failed to get event info', details: error.message });
   }
 });
 
@@ -201,9 +140,10 @@ app.use((error, req, res, next) => {
 
 // Start server
 app.listen(port, () => {
-  console.log(`🚀 NEARCON AI Backend running on port ${port}`);
+  console.log(`🚀 NEARCON AI Context Server running on port ${port}`);
   console.log(`📡 Accepting connections from: ${corsOptions.origin.join(', ')}`);
-  console.log(`🔐 NEAR AI API Key configured: ${apiKey ? 'Yes' : 'No'}`);
+  console.log(`📄 Context loaded at: ${contextLoader.getLastUpdated()?.toISOString() || 'Not loaded'}`);
+  console.log(`📋 Event: ${contextLoader.getEventInfo().name} - ${contextLoader.getEventInfo().dates}`);
 });
 
 module.exports = app;

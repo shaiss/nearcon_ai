@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NEARCON AI Chat
 // @namespace    https://nearcon.org
-// @version      2.0.0
+// @version      2.1.1
 // @description  NEAR AI-powered chat assistant for NEARCON 2026 with TEE verification (BYOK)
 // @author       NEAR AI
 // @match        https://nearcon.org/*
@@ -9,17 +9,57 @@
 // @grant        GM_addStyle
 // @grant        GM_setValue
 // @grant        GM_getValue
+// @grant        GM_xmlhttpRequest
 // @connect      cloud-api.near.ai
+// @connect      localhost
+// @connect      127.0.0.1
 // ==/UserScript==
 
 (function() {
     'use strict';
 
-    // Configuration - Direct NEAR AI API (no backend needed!)
+    // Configuration
     const NEAR_AI_API_URL = 'https://cloud-api.near.ai/v1';
+    const BACKEND_URL = 'http://localhost:3000'; // Context provider backend
     const DEFAULT_MODEL = 'deepseek-ai/DeepSeek-V3.1';
     const STORAGE_KEY = 'nearcon_ai_api_key';
     const MODEL_STORAGE_KEY = 'nearcon_ai_model';
+    const CONTEXT_STORAGE_KEY = 'nearcon_ai_context';
+
+    // GM_xmlhttpRequest wrapper to bypass CORS (works like fetch)
+    function gmFetch(url, options = {}) {
+        return new Promise((resolve, reject) => {
+            GM_xmlhttpRequest({
+                method: options.method || 'GET',
+                url: url,
+                headers: options.headers || {},
+                data: options.body || null,
+                responseType: 'text',
+                onload: function(response) {
+                    // Create a fetch-like response object
+                    const fetchResponse = {
+                        ok: response.status >= 200 && response.status < 300,
+                        status: response.status,
+                        statusText: response.statusText,
+                        headers: {
+                            get: (name) => response.responseHeaders.split('\n')
+                                .find(h => h.toLowerCase().startsWith(name.toLowerCase() + ':'))
+                                ?.split(':').slice(1).join(':').trim() || null
+                        },
+                        text: () => Promise.resolve(response.responseText),
+                        json: () => Promise.resolve(JSON.parse(response.responseText))
+                    };
+                    resolve(fetchResponse);
+                },
+                onerror: function(error) {
+                    reject(new Error('Network request failed: ' + (error.statusText || 'Unknown error')));
+                },
+                ontimeout: function() {
+                    reject(new Error('Request timed out'));
+                }
+            });
+        });
+    }
 
     // State
     let isOpen = true;
@@ -30,6 +70,8 @@
     let lastAttestation = null;
     let userApiKey = null;
     let showingSettings = false;
+    let cachedContext = null;
+    let contextLastUpdated = null;
 
     // Inject styles
     GM_addStyle(`
@@ -839,6 +881,60 @@
             flex-shrink: 0;
         }
 
+        /* Context Status Badge */
+        .context-status {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 24px;
+            background: #f1f5f9;
+            border-bottom: 1px solid #e2e8f0;
+            font-size: 11px;
+            color: #64748b;
+        }
+
+        .context-status .status-text {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .context-status .status-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #22c55e;
+        }
+
+        .context-status .status-dot.loading {
+            background: #f59e0b;
+            animation: pulse 1s infinite;
+        }
+
+        .context-status .status-dot.error {
+            background: #ef4444;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .context-status .refresh-btn {
+            background: none;
+            border: none;
+            color: #0ea5e9;
+            font-size: 11px;
+            cursor: pointer;
+            padding: 2px 6px;
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
+
+        .context-status .refresh-btn:hover {
+            background: #e0f2fe;
+        }
+
         /* Mobile Responsive */
         @media (max-width: 768px) {
             #nearcon-ai-chat {
@@ -993,6 +1089,13 @@
                         <option value="deepseek-ai/DeepSeek-V3.1">Loading models...</option>
                     </select>
                 </div>
+                <div class="context-status" id="context-status">
+                    <span class="status-text">
+                        <span class="status-dot loading" id="context-status-dot"></span>
+                        <span id="context-status-text">Loading context...</span>
+                    </span>
+                    <button class="refresh-btn" id="refresh-context-btn" title="Refresh context">↻ Refresh</button>
+                </div>
                 <div id="nearcon-ai-messages">
                     <div class="welcome-message">
                         <h4>👋 Welcome to NEARCON 2026!</h4>
@@ -1040,6 +1143,11 @@
             showingSettings = false;
         });
 
+        // Refresh context button
+        document.getElementById('refresh-context-btn').addEventListener('click', async () => {
+            await fetchContext();
+        });
+
         // API key setup handlers
         document.getElementById('save-api-key-btn').addEventListener('click', handleSaveApiKey);
         document.getElementById('api-key-input').addEventListener('keypress', (e) => {
@@ -1052,6 +1160,12 @@
             showApiKeySetup();
         });
         document.getElementById('clear-key-btn').addEventListener('click', handleClearKey);
+
+        // Load context from backend
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/40bff277-f4c6-471b-b8b1-62ce719cd122',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'nearcon-chat.user.js:createChatUI',message:'Initializing - calling fetchContext',data:{backendUrl:BACKEND_URL,nearAiUrl:NEAR_AI_API_URL},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'init'})}).catch(()=>{});
+        // #endregion
+        fetchContext();
 
         // Check if we have an API key
         if (userApiKey) {
@@ -1119,13 +1233,21 @@
         saveBtn.textContent = 'Validating...';
         errorDiv.style.display = 'none';
 
-        // Test the key with a simple API call
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/40bff277-f4c6-471b-b8b1-62ce719cd122',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'nearcon-chat.user.js:handleSaveApiKey',message:'Attempting API key validation',data:{url:`${NEAR_AI_API_URL}/models`,usingGmFetch:true},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'A'})}).catch(()=>{});
+        // #endregion
+
+        // Test the key with a simple API call (using GM_xmlhttpRequest to bypass CORS)
         try {
-            const response = await fetch(`${NEAR_AI_API_URL}/models`, {
+            const response = await gmFetch(`${NEAR_AI_API_URL}/models`, {
                 headers: {
                     'Authorization': `Bearer ${key}`
                 }
             });
+
+            // #region agent log
+            fetch('http://127.0.0.1:7242/ingest/40bff277-f4c6-471b-b8b1-62ce719cd122',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'nearcon-chat.user.js:handleSaveApiKey',message:'gmFetch succeeded',data:{status:response.status,ok:response.ok},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'A'})}).catch(()=>{});
+            // #endregion
 
             if (response.ok) {
                 saveApiKey(key);
@@ -1139,6 +1261,10 @@
                 errorDiv.style.display = 'flex';
             }
         } catch (error) {
+            // #region agent log
+            fetch('http://127.0.0.1:7242/ingest/40bff277-f4c6-471b-b8b1-62ce719cd122',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'nearcon-chat.user.js:handleSaveApiKey',message:'gmFetch FAILED',data:{errorName:error.name,errorMessage:error.message},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'A'})}).catch(()=>{});
+            // #endregion
+
             console.error('API key validation error:', error);
             errorText.textContent = 'Could not connect to NEAR AI. Please try again.';
             errorDiv.style.display = 'flex';
@@ -1163,7 +1289,7 @@
         if (!userApiKey) return;
 
         try {
-            const response = await fetch(`${NEAR_AI_API_URL}/models`, {
+            const response = await gmFetch(`${NEAR_AI_API_URL}/models`, {
                 headers: {
                     'Authorization': `Bearer ${userApiKey}`
                 }
@@ -1300,26 +1426,138 @@
         messagesContainer.scrollTop = messagesContainer.scrollHeight;
     }
 
+    // Format time ago for human-readable display
+    function formatTimeAgo(timestamp) {
+        if (!timestamp) return 'unknown';
+        
+        const now = Date.now();
+        const date = new Date(timestamp);
+        const seconds = Math.floor((now - date.getTime()) / 1000);
+        
+        if (seconds < 60) return 'just now';
+        if (seconds < 3600) return `${Math.floor(seconds / 60)} min ago`;
+        if (seconds < 86400) return `${Math.floor(seconds / 3600)} hours ago`;
+        if (seconds < 604800) return `${Math.floor(seconds / 86400)} days ago`;
+        return date.toLocaleDateString();
+    }
+
+    // Update context status display
+    function updateContextStatus(status, message) {
+        const dot = document.getElementById('context-status-dot');
+        const text = document.getElementById('context-status-text');
+        
+        if (dot) {
+            dot.className = 'status-dot';
+            if (status === 'loading') dot.classList.add('loading');
+            if (status === 'error') dot.classList.add('error');
+        }
+        
+        if (text) {
+            text.textContent = message;
+        }
+    }
+
+    // Fetch context from backend
+    async function fetchContext() {
+        updateContextStatus('loading', 'Loading context...');
+        
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/40bff277-f4c6-471b-b8b1-62ce719cd122',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'nearcon-chat.user.js:fetchContext',message:'Attempting context fetch with gmFetch',data:{url:`${BACKEND_URL}/api/context`,origin:window.location.origin},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'D'})}).catch(()=>{});
+        // #endregion
+        
+        try {
+            const response = await gmFetch(`${BACKEND_URL}/api/context`);
+            
+            if (!response.ok) {
+                throw new Error(`Backend error: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            
+            // Cache the context
+            cachedContext = data.systemMessage;
+            contextLastUpdated = data.lastUpdated;
+            
+            // Save to storage for offline fallback
+            try {
+                if (typeof GM_setValue !== 'undefined') {
+                    GM_setValue(CONTEXT_STORAGE_KEY, JSON.stringify({
+                        context: cachedContext,
+                        lastUpdated: contextLastUpdated
+                    }));
+                } else {
+                    localStorage.setItem(CONTEXT_STORAGE_KEY, JSON.stringify({
+                        context: cachedContext,
+                        lastUpdated: contextLastUpdated
+                    }));
+                }
+            } catch (e) {
+                console.warn('Could not cache context:', e);
+            }
+            
+            // Update status display
+            updateContextStatus('ok', `Data: ${formatTimeAgo(contextLastUpdated)}`);
+            
+            console.log('[NEARCON AI] Context loaded:', {
+                event: data.event?.name,
+                lastUpdated: contextLastUpdated
+            });
+            
+            return true;
+        } catch (error) {
+            // #region agent log
+            fetch('http://127.0.0.1:7242/ingest/40bff277-f4c6-471b-b8b1-62ce719cd122',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'nearcon-chat.user.js:fetchContext',message:'Context fetch FAILED',data:{errorName:error.name,errorMessage:error.message},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'D'})}).catch(()=>{});
+            // #endregion
+
+            console.error('[NEARCON AI] Failed to fetch context:', error);
+            
+            // Try to load from cache
+            try {
+                let cached;
+                if (typeof GM_getValue !== 'undefined') {
+                    cached = GM_getValue(CONTEXT_STORAGE_KEY, null);
+                } else {
+                    cached = localStorage.getItem(CONTEXT_STORAGE_KEY);
+                }
+                
+                if (cached) {
+                    const parsed = typeof cached === 'string' ? JSON.parse(cached) : cached;
+                    cachedContext = parsed.context;
+                    contextLastUpdated = parsed.lastUpdated;
+                    updateContextStatus('ok', `Cached: ${formatTimeAgo(contextLastUpdated)}`);
+                    console.log('[NEARCON AI] Using cached context');
+                    return true;
+                }
+            } catch (e) {
+                console.warn('Could not load cached context:', e);
+            }
+            
+            // Fallback to default context
+            updateContextStatus('error', 'Using fallback');
+            return false;
+        }
+    }
+
     // Get system prompt for NEARCON context
     function getSystemPrompt() {
+        // Use cached context if available
+        if (cachedContext) {
+            return cachedContext;
+        }
+        
+        // Fallback to basic prompt if context not loaded
         return {
             role: 'system',
-            content: `You are NearBot, a helpful AI assistant for NEARCON 2026 - the premier NEAR Protocol conference. You run in a Trusted Execution Environment (TEE) providing private, verifiable AI inference.
+            content: `You are NearBot, a helpful AI assistant for NEARCON 2026 - The Premier AI Industry Conference.
 
-Key information about NEARCON 2026:
-- Location: Lisbon, Portugal
-- Dates: November 2026
-- Focus: AI + Blockchain convergence, Chain Abstraction, DeFi, NFTs, and the Open Web
+Event Information:
+- Dates: February 23-24, 2026
+- Location: Fort Mason Center for Arts & Culture, San Francisco, California, USA
+- Website: nearcon.org
 
-You can help attendees with:
-- Conference schedule and sessions
-- Speaker information
-- Venue navigation
-- NEAR ecosystem and technology questions
-- Networking suggestions
-- Local recommendations in Lisbon
+You run in a Trusted Execution Environment (TEE) on NEAR AI Cloud, providing cryptographically verifiable responses.
 
-Be friendly, concise, and helpful. When discussing NEAR technology, emphasize privacy, security, and the benefits of TEE-verified AI.`
+Be friendly, concise, and helpful. For detailed event information, please visit nearcon.org.`
         };
     }
 
@@ -1349,16 +1587,11 @@ Be friendly, concise, and helpful. When discussing NEAR technology, emphasize pr
         showTypingIndicator();
 
         try {
-            // Create assistant message placeholder
-            let assistantContent = '';
-            let assistantDiv = null;
-            let chatId = null;
-
             // Add system prompt to messages
             const messagesWithContext = [getSystemPrompt(), ...messages];
 
-            // Stream directly from NEAR AI API
-            const response = await fetch(`${NEAR_AI_API_URL}/chat/completions`, {
+            // Use gmFetch to bypass CORS (non-streaming mode)
+            const response = await gmFetch(`${NEAR_AI_API_URL}/chat/completions`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -1367,7 +1600,7 @@ Be friendly, concise, and helpful. When discussing NEAR technology, emphasize pr
                 body: JSON.stringify({
                     model: selectedModel,
                     messages: messagesWithContext,
-                    stream: true,
+                    stream: false,
                     max_tokens: 1000,
                     temperature: 0.7
                 })
@@ -1378,54 +1611,17 @@ Be friendly, concise, and helpful. When discussing NEAR technology, emphasize pr
                 throw new Error(errorData.error?.message || `API error: ${response.status}`);
             }
 
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
+            const data = await response.json();
+            const chatId = data.id;
+            const assistantContent = data.choices?.[0]?.message?.content || '';
 
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
+            // Remove typing indicator and show response
+            removeTypingIndicator();
+            const assistantDiv = addMessage('assistant', assistantContent, { verified: false });
 
-                const chunk = decoder.decode(value);
-                const lines = chunk.split('\n');
-
-                for (const line of lines) {
-                    if (line.startsWith('data: ')) {
-                        const data = line.slice(6);
-                        if (data === '[DONE]') continue;
-
-                        try {
-                            const parsed = JSON.parse(data);
-
-                            // Get chat ID from first response
-                            if (parsed.id && !chatId) {
-                                chatId = parsed.id;
-                            }
-
-                            // Extract content from streaming delta
-                            const content = parsed.choices?.[0]?.delta?.content;
-                            if (content) {
-                                // Remove typing indicator on first chunk
-                                if (!assistantDiv) {
-                                    removeTypingIndicator();
-                                    assistantDiv = addMessage('assistant', '', { verified: false });
-                                }
-
-                                assistantContent += content;
-                                updateMessageContent(assistantDiv, assistantContent);
-                            }
-
-                            // Check for finish
-                            if (parsed.choices?.[0]?.finish_reason === 'stop') {
-                                // Fetch verification after completion
-                                if (chatId && assistantDiv) {
-                                    fetchVerification(chatId, assistantDiv);
-                                }
-                            }
-                        } catch (e) {
-                            // Ignore parse errors for incomplete JSON
-                        }
-                    }
-                }
+            // Fetch verification after completion
+            if (chatId && assistantDiv) {
+                fetchVerification(chatId, assistantDiv);
             }
 
             // Add to messages history
@@ -1461,9 +1657,9 @@ Be friendly, concise, and helpful. When discussing NEAR technology, emphasize pr
         if (!userApiKey) return;
 
         try {
-            // Get attestation directly from NEAR AI API
+            // Get attestation directly from NEAR AI API (using gmFetch to bypass CORS)
             const encodedModel = encodeURIComponent(selectedModel);
-            const attestationResponse = await fetch(`${NEAR_AI_API_URL}/attestation/report?model=${encodedModel}`, {
+            const attestationResponse = await gmFetch(`${NEAR_AI_API_URL}/attestation/report?model=${encodedModel}`, {
                 headers: {
                     'Authorization': `Bearer ${userApiKey}`
                 }
