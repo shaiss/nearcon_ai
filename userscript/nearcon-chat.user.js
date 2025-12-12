@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NEARCON AI Chat
 // @namespace    https://nearcon.org
-// @version      2.1.1
+// @version      2.2.0
 // @description  NEAR AI-powered chat assistant for NEARCON 2026 with TEE verification (BYOK)
 // @author       NEAR AI
 // @match        https://nearcon.org/*
@@ -61,7 +61,7 @@
     }
 
     // State
-    let isOpen = true;
+    let isOpen = false; // Start hidden by default to be less obtrusive
     let messages = [];
     let isLoading = false;
     let selectedModel = DEFAULT_MODEL;
@@ -108,42 +108,58 @@
             transform: translateX(0);
         }
 
-        /* Toggle Button - Subtle tab on left edge */
+        /* Toggle Button - Bottom right corner */
         #nearcon-ai-toggle {
-            position: absolute;
-            left: -40px;
-            top: 50%;
-            transform: translateY(-50%);
-            width: 40px;
-            height: 80px;
+            position: fixed;
+            right: 20px;
+            bottom: 20px;
+            width: 56px;
+            height: 56px;
             background: linear-gradient(135deg, #0ea5e9 0%, #14b8a6 100%);
             border: none;
-            border-top-left-radius: 8px;
-            border-bottom-left-radius: 8px;
+            border-radius: 50%;
             cursor: pointer;
             display: flex;
             align-items: center;
             justify-content: center;
             transition: all 0.3s ease;
-            box-shadow: -2px 0 8px rgba(14, 165, 233, 0.2);
+            box-shadow: 0 4px 16px rgba(14, 165, 233, 0.3);
             pointer-events: auto;
+            z-index: 999999;
         }
 
         #nearcon-ai-toggle:hover {
-            width: 44px;
-            left: -44px;
-            box-shadow: -4px 0 12px rgba(14, 165, 233, 0.3);
+            transform: scale(1.1);
+            box-shadow: 0 6px 20px rgba(14, 165, 233, 0.4);
+        }
+        
+        /* Move toggle to left of sidebar when open */
+        #nearcon-ai-sidebar.open ~ #nearcon-ai-toggle {
+            right: 440px;
         }
 
         #nearcon-ai-toggle svg {
-            width: 20px;
-            height: 20px;
+            width: 28px;
+            height: 28px;
             fill: white;
             transition: transform 0.3s ease;
         }
 
-        #nearcon-ai-sidebar.open ~ #nearcon-ai-toggle svg {
-            transform: rotate(180deg);
+        /* Hide chat icon, show close icon when open */
+        #nearcon-ai-toggle .icon-chat {
+            display: block;
+        }
+        
+        #nearcon-ai-toggle .icon-close {
+            display: none;
+        }
+        
+        #nearcon-ai-sidebar.open ~ #nearcon-ai-toggle .icon-chat {
+            display: none;
+        }
+        
+        #nearcon-ai-sidebar.open ~ #nearcon-ai-toggle .icon-close {
+            display: block;
         }
 
         /* Header */
@@ -945,14 +961,15 @@
             }
 
             #nearcon-ai-toggle {
-                left: -36px;
-                width: 36px;
-                height: 60px;
+                right: 16px;
+                bottom: 16px;
+                width: 52px;
+                height: 52px;
             }
-
-            #nearcon-ai-toggle:hover {
-                left: -40px;
-                width: 40px;
+            
+            #nearcon-ai-sidebar.open ~ #nearcon-ai-toggle {
+                right: 16px;
+                bottom: 16px;
             }
         }
     `);
@@ -1025,7 +1042,7 @@
         container.id = 'nearcon-ai-chat';
 
         container.innerHTML = `
-            <div id="nearcon-ai-sidebar" class="open">
+            <div id="nearcon-ai-sidebar">
                 <div id="nearcon-ai-header">
                     <h3>
                         <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
@@ -1110,9 +1127,12 @@
                     </button>
                 </div>
             </div>
-            <button id="nearcon-ai-toggle" title="Toggle AI Assistant">
-                <svg viewBox="0 0 24 24">
-                    <path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/>
+            <button id="nearcon-ai-toggle" title="Chat with NearBot">
+                <svg class="icon-chat" viewBox="0 0 24 24">
+                    <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/>
+                </svg>
+                <svg class="icon-close" viewBox="0 0 24 24">
+                    <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
                 </svg>
             </button>
         `;
