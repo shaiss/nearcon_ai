@@ -12,7 +12,6 @@
 // @grant        GM_xmlhttpRequest
 // @connect      cloud-api.near.ai
 // @connect      localhost
-// @connect      127.0.0.1
 // ==/UserScript==
 
 (function() {
@@ -1162,9 +1161,6 @@
         document.getElementById('clear-key-btn').addEventListener('click', handleClearKey);
 
         // Load context from backend
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/40bff277-f4c6-471b-b8b1-62ce719cd122',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'nearcon-chat.user.js:createChatUI',message:'Initializing - calling fetchContext',data:{backendUrl:BACKEND_URL,nearAiUrl:NEAR_AI_API_URL},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'init'})}).catch(()=>{});
-        // #endregion
         fetchContext();
 
         // Check if we have an API key
@@ -1233,10 +1229,6 @@
         saveBtn.textContent = 'Validating...';
         errorDiv.style.display = 'none';
 
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/40bff277-f4c6-471b-b8b1-62ce719cd122',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'nearcon-chat.user.js:handleSaveApiKey',message:'Attempting API key validation',data:{url:`${NEAR_AI_API_URL}/models`,usingGmFetch:true},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'A'})}).catch(()=>{});
-        // #endregion
-
         // Test the key with a simple API call (using GM_xmlhttpRequest to bypass CORS)
         try {
             const response = await gmFetch(`${NEAR_AI_API_URL}/models`, {
@@ -1244,10 +1236,6 @@
                     'Authorization': `Bearer ${key}`
                 }
             });
-
-            // #region agent log
-            fetch('http://127.0.0.1:7242/ingest/40bff277-f4c6-471b-b8b1-62ce719cd122',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'nearcon-chat.user.js:handleSaveApiKey',message:'gmFetch succeeded',data:{status:response.status,ok:response.ok},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'A'})}).catch(()=>{});
-            // #endregion
 
             if (response.ok) {
                 saveApiKey(key);
@@ -1261,10 +1249,6 @@
                 errorDiv.style.display = 'flex';
             }
         } catch (error) {
-            // #region agent log
-            fetch('http://127.0.0.1:7242/ingest/40bff277-f4c6-471b-b8b1-62ce719cd122',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'nearcon-chat.user.js:handleSaveApiKey',message:'gmFetch FAILED',data:{errorName:error.name,errorMessage:error.message},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'A'})}).catch(()=>{});
-            // #endregion
-
             console.error('API key validation error:', error);
             errorText.textContent = 'Could not connect to NEAR AI. Please try again.';
             errorDiv.style.display = 'flex';
@@ -1461,10 +1445,6 @@
     async function fetchContext() {
         updateContextStatus('loading', 'Loading context...');
         
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/40bff277-f4c6-471b-b8b1-62ce719cd122',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'nearcon-chat.user.js:fetchContext',message:'Attempting context fetch with gmFetch',data:{url:`${BACKEND_URL}/api/context`,origin:window.location.origin},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'D'})}).catch(()=>{});
-        // #endregion
-        
         try {
             const response = await gmFetch(`${BACKEND_URL}/api/context`);
             
@@ -1505,10 +1485,6 @@
             
             return true;
         } catch (error) {
-            // #region agent log
-            fetch('http://127.0.0.1:7242/ingest/40bff277-f4c6-471b-b8b1-62ce719cd122',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'nearcon-chat.user.js:fetchContext',message:'Context fetch FAILED',data:{errorName:error.name,errorMessage:error.message},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'D'})}).catch(()=>{});
-            // #endregion
-
             console.error('[NEARCON AI] Failed to fetch context:', error);
             
             // Try to load from cache
