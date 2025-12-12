@@ -77,57 +77,32 @@ An AI-powered chat assistant for **NEARCON 2026** that runs on NEAR AI Cloud wit
 ## 🏗️ Architecture
 
 ```mermaid
-flowchart TB
-    subgraph Website["🌐 NEARCON.org Website"]
-        subgraph Userscript["📜 Userscript (nearcon-chat.user.js)"]
-            BYOK["🔑 BYOK<br/>User's own API key"]
-            MODEL["🤖 Model Selector<br/>with persistence"]
-            FAB["💬 Floating FAB<br/>bottom-right, hidden by default"]
-            TEE_UI["✅ TEE Verification<br/>expanded details panel"]
-        end
+flowchart LR
+    subgraph Client["🌐 Browser"]
+        US["Userscript<br/>BYOK + Model Selector<br/>FAB + TEE Panel"]
     end
 
-    subgraph Backend["📦 Context Backend Server (localhost:3000)"]
-        LOADER["context-loader.js"]
-        subgraph Data["📁 Data Files"]
-            PROMPT["system-prompt.md"]
-            EVENT["event-context.json"]
-            FAQS["faqs.json"]
-        end
-        API_CTX[/"GET /api/context<br/>(System prompt + data)"/]
+    subgraph Context["📦 Context Server"]
+        CTX["GET /api/context"]
+        DATA[("system-prompt.md<br/>event-context.json<br/>faqs.json")]
+        CTX --- DATA
     end
 
-    subgraph NEARAI["☁️ NEAR AI Cloud (Direct Connection)"]
-        CHAT["💬 Chat Completions API"]
-        MODELS["📋 Models List API"]
-        ATTEST["🔐 Attestation API"]
-        SIG["✍️ Signature Verification"]
-        
-        subgraph TEE["🛡️ TEE Environment"]
-            TDX["Intel TDX<br/>CPU Isolation"]
-            GPU["NVIDIA H200<br/>GPU Security"]
+    subgraph Cloud["☁️ NEAR AI Cloud"]
+        API["Chat API<br/>Models API<br/>Attestation API"]
+        subgraph TEE["🔒 TEE"]
+            HW["Intel TDX + NVIDIA H200"]
         end
+        API --> TEE
     end
 
-    %% Connections
-    Userscript -->|"Fetch Context"| API_CTX
-    LOADER --> Data
-    API_CTX --> LOADER
-    
-    Userscript -->|"GM_xmlhttpRequest<br/>(CORS Bypass)"| CHAT
-    Userscript -->|"Direct API"| MODELS
-    Userscript -->|"Direct API"| ATTEST
-    
-    CHAT --> TEE
-    ATTEST --> TEE
+    US -->|"Fetch Context"| CTX
+    US -->|"Direct API<br/>(GM_xmlhttpRequest)"| API
 
-    %% Styling
-    style Website fill:#fff3cd,stroke:#ffc107,stroke-width:2px
-    style Backend fill:#f8f9fa,stroke:#6c757d,stroke-width:2px
-    style NEARAI fill:#e7f3ff,stroke:#0ea5e9,stroke-width:2px
-    style TEE fill:#d4edda,stroke:#28a745,stroke-width:2px
-    style Userscript fill:#ffe8cc,stroke:#fd7e14
-    style Data fill:#e2e3e5,stroke:#6c757d
+    style Client fill:#fff3cd,stroke:#ffc107
+    style Context fill:#f8f9fa,stroke:#6c757d
+    style Cloud fill:#e7f3ff,stroke:#0ea5e9
+    style TEE fill:#d4edda,stroke:#28a745
 ```
 
 ## 📁 Project Structure
