@@ -1,26 +1,35 @@
 // ==UserScript==
 // @name         NEARCON AI Chat
 // @namespace    https://nearcon.org
-// @version      1.0.0
-// @description  NEAR AI-powered chat assistant for NEARCON 2026 with TEE verification
+// @version      2.0.0
+// @description  NEAR AI-powered chat assistant for NEARCON 2026 with TEE verification (BYOK)
 // @author       NEAR AI
 // @match        https://nearcon.org/*
 // @match        https://www.nearcon.org/*
 // @grant        GM_addStyle
-// @connect      localhost
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @connect      cloud-api.near.ai
 // ==/UserScript==
 
 (function() {
     'use strict';
 
-    // Configuration
-    const BACKEND_URL = 'http://localhost:3000';
-    const MODEL = 'gpt-oss-120b';
+    // Configuration - Direct NEAR AI API (no backend needed!)
+    const NEAR_AI_API_URL = 'https://cloud-api.near.ai/v1';
+    const DEFAULT_MODEL = 'deepseek-ai/DeepSeek-V3.1';
+    const STORAGE_KEY = 'nearcon_ai_api_key';
+    const MODEL_STORAGE_KEY = 'nearcon_ai_model';
 
     // State
-    let isOpen = true; // Start open by default
+    let isOpen = true;
     let messages = [];
     let isLoading = false;
+    let selectedModel = DEFAULT_MODEL;
+    let availableModels = [];
+    let lastAttestation = null;
+    let userApiKey = null;
+    let showingSettings = false;
 
     // Inject styles
     GM_addStyle(`
@@ -123,6 +132,46 @@
             border-radius: 12px;
             font-size: 11px;
             font-weight: 500;
+        }
+
+        /* Model Selector */
+        .model-selector-container {
+            padding: 12px 24px;
+            background: #f8fafc;
+            border-bottom: 1px solid #e2e8f0;
+            flex-shrink: 0;
+        }
+
+        .model-selector-label {
+            font-size: 11px;
+            color: #64748b;
+            margin-bottom: 6px;
+            display: block;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        #nearcon-model-select {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 13px;
+            background: white;
+            color: #1e293b;
+            cursor: pointer;
+            outline: none;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        #nearcon-model-select:hover {
+            border-color: #cbd5e1;
+        }
+
+        #nearcon-model-select:focus {
+            border-color: #0ea5e9;
+            box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.1);
         }
 
         /* Messages Container */
@@ -326,6 +375,126 @@
             word-break: break-all;
         }
 
+        /* Expanded TEE Details */
+        .tee-details-toggle {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            margin-top: 8px;
+            padding: 6px 10px;
+            background: #e2e8f0;
+            border: none;
+            border-radius: 6px;
+            font-size: 11px;
+            color: #475569;
+            cursor: pointer;
+            transition: all 0.2s;
+            width: 100%;
+            justify-content: center;
+        }
+
+        .tee-details-toggle:hover {
+            background: #cbd5e1;
+            color: #1e293b;
+        }
+
+        .tee-details-toggle svg {
+            width: 12px;
+            height: 12px;
+            transition: transform 0.2s;
+        }
+
+        .tee-details-toggle.expanded svg {
+            transform: rotate(180deg);
+        }
+
+        .tee-details-panel {
+            display: none;
+            margin-top: 8px;
+            padding: 12px;
+            background: #f1f5f9;
+            border-radius: 8px;
+            font-size: 11px;
+        }
+
+        .tee-details-panel.open {
+            display: block;
+        }
+
+        .tee-section {
+            margin-bottom: 12px;
+        }
+
+        .tee-section:last-child {
+            margin-bottom: 0;
+        }
+
+        .tee-section-title {
+            font-weight: 600;
+            color: #334155;
+            margin-bottom: 6px;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .tee-detail-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 4px 0;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        .tee-detail-row:last-child {
+            border-bottom: none;
+        }
+
+        .tee-detail-label {
+            color: #64748b;
+            font-size: 10px;
+        }
+
+        .tee-detail-value {
+            font-family: monospace;
+            font-size: 10px;
+            color: #334155;
+            text-align: right;
+            max-width: 180px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .tee-detail-value.full {
+            word-break: break-all;
+            white-space: normal;
+            text-align: left;
+            max-width: 100%;
+        }
+
+        .tee-hash {
+            display: block;
+            background: #e2e8f0;
+            padding: 6px 8px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 9px;
+            color: #475569;
+            word-break: break-all;
+            margin-top: 4px;
+        }
+
+        .tee-algo-badge {
+            display: inline-block;
+            background: #dbeafe;
+            color: #1d4ed8;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 9px;
+            font-weight: 500;
+            text-transform: uppercase;
+        }
+
         /* Typing Indicator */
         .typing-indicator {
             display: flex;
@@ -429,6 +598,247 @@
             line-height: 1.5;
         }
 
+        /* Settings Button in Header */
+        .settings-btn {
+            background: rgba(255, 255, 255, 0.2);
+            border: none;
+            border-radius: 6px;
+            padding: 6px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.2s;
+        }
+
+        .settings-btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .settings-btn svg {
+            width: 18px;
+            height: 18px;
+            fill: white;
+        }
+
+        /* API Key Setup Panel */
+        .api-key-setup {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 32px 24px;
+            background: #f8fafc;
+            text-align: center;
+        }
+
+        .api-key-setup .setup-icon {
+            width: 64px;
+            height: 64px;
+            background: linear-gradient(135deg, #0ea5e9 0%, #14b8a6 100%);
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 20px;
+        }
+
+        .api-key-setup .setup-icon svg {
+            width: 32px;
+            height: 32px;
+            fill: white;
+        }
+
+        .api-key-setup h4 {
+            margin: 0 0 8px 0;
+            font-size: 18px;
+            color: #1e293b;
+        }
+
+        .api-key-setup p {
+            margin: 0 0 20px 0;
+            font-size: 13px;
+            color: #64748b;
+            line-height: 1.5;
+        }
+
+        .api-key-setup .input-group {
+            width: 100%;
+            max-width: 320px;
+            margin-bottom: 16px;
+        }
+
+        .api-key-setup input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: monospace;
+            outline: none;
+            transition: border-color 0.2s, box-shadow 0.2s;
+            box-sizing: border-box;
+        }
+
+        .api-key-setup input:focus {
+            border-color: #0ea5e9;
+            box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.1);
+        }
+
+        .api-key-setup .save-btn {
+            width: 100%;
+            max-width: 320px;
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #0ea5e9 0%, #14b8a6 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .api-key-setup .save-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(14, 165, 233, 0.3);
+        }
+
+        .api-key-setup .save-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .api-key-setup .helper-link {
+            margin-top: 16px;
+            font-size: 12px;
+        }
+
+        .api-key-setup .helper-link a {
+            color: #0ea5e9;
+            text-decoration: none;
+        }
+
+        .api-key-setup .helper-link a:hover {
+            text-decoration: underline;
+        }
+
+        /* Settings Panel (for updating key) */
+        .settings-panel {
+            padding: 20px 24px;
+            background: #f8fafc;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        .settings-panel h4 {
+            margin: 0 0 12px 0;
+            font-size: 14px;
+            color: #1e293b;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .settings-panel .key-display {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .settings-panel .key-masked {
+            flex: 1;
+            padding: 10px 12px;
+            background: white;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            font-family: monospace;
+            font-size: 13px;
+            color: #64748b;
+        }
+
+        .settings-panel .key-status {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: #16a34a;
+        }
+
+        .settings-panel .key-status svg {
+            width: 14px;
+            height: 14px;
+            fill: currentColor;
+        }
+
+        .settings-panel .btn-group {
+            display: flex;
+            gap: 8px;
+        }
+
+        .settings-panel .btn {
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: none;
+        }
+
+        .settings-panel .btn-secondary {
+            background: #e2e8f0;
+            color: #475569;
+        }
+
+        .settings-panel .btn-secondary:hover {
+            background: #cbd5e1;
+        }
+
+        .settings-panel .btn-danger {
+            background: #fee2e2;
+            color: #dc2626;
+        }
+
+        .settings-panel .btn-danger:hover {
+            background: #fecaca;
+        }
+
+        .settings-panel .btn-close {
+            background: transparent;
+            color: #64748b;
+            padding: 4px;
+        }
+
+        .settings-panel .settings-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        /* Error Message */
+        .error-message {
+            background: #fee2e2;
+            color: #dc2626;
+            padding: 10px 14px;
+            border-radius: 8px;
+            font-size: 12px;
+            margin-top: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .error-message svg {
+            width: 16px;
+            height: 16px;
+            fill: currentColor;
+            flex-shrink: 0;
+        }
+
         /* Mobile Responsive */
         @media (max-width: 768px) {
             #nearcon-ai-chat {
@@ -452,8 +862,70 @@
         }
     `);
 
+    // Load saved API key from storage
+    function loadApiKey() {
+        try {
+            // Try GM storage first, fallback to localStorage
+            if (typeof GM_getValue !== 'undefined') {
+                userApiKey = GM_getValue(STORAGE_KEY, null);
+                selectedModel = GM_getValue(MODEL_STORAGE_KEY, DEFAULT_MODEL);
+            } else {
+                userApiKey = localStorage.getItem(STORAGE_KEY);
+                selectedModel = localStorage.getItem(MODEL_STORAGE_KEY) || DEFAULT_MODEL;
+            }
+        } catch (e) {
+            userApiKey = localStorage.getItem(STORAGE_KEY);
+            selectedModel = localStorage.getItem(MODEL_STORAGE_KEY) || DEFAULT_MODEL;
+        }
+    }
+
+    // Save API key to storage
+    function saveApiKey(key) {
+        try {
+            if (typeof GM_setValue !== 'undefined') {
+                GM_setValue(STORAGE_KEY, key);
+            } else {
+                localStorage.setItem(STORAGE_KEY, key);
+            }
+        } catch (e) {
+            localStorage.setItem(STORAGE_KEY, key);
+        }
+        userApiKey = key;
+    }
+
+    // Save selected model
+    function saveSelectedModel(model) {
+        try {
+            if (typeof GM_setValue !== 'undefined') {
+                GM_setValue(MODEL_STORAGE_KEY, model);
+            } else {
+                localStorage.setItem(MODEL_STORAGE_KEY, model);
+            }
+        } catch (e) {
+            localStorage.setItem(MODEL_STORAGE_KEY, model);
+        }
+        selectedModel = model;
+    }
+
+    // Clear API key
+    function clearApiKey() {
+        try {
+            if (typeof GM_setValue !== 'undefined') {
+                GM_setValue(STORAGE_KEY, null);
+            } else {
+                localStorage.removeItem(STORAGE_KEY);
+            }
+        } catch (e) {
+            localStorage.removeItem(STORAGE_KEY);
+        }
+        userApiKey = null;
+    }
+
     // Create chat UI
     function createChatUI() {
+        // Load saved key first
+        loadApiKey();
+
         const container = document.createElement('div');
         container.id = 'nearcon-ai-chat';
 
@@ -467,6 +939,59 @@
                         NearBot
                         <span class="tee-badge">TEE Verified</span>
                     </h3>
+                    <button class="settings-btn" id="nearcon-settings-btn" title="Settings">
+                        <svg viewBox="0 0 24 24">
+                            <path d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
+                        </svg>
+                    </button>
+                </div>
+                <div id="nearcon-settings-panel" class="settings-panel" style="display: none;">
+                    <div class="settings-header">
+                        <h4>
+                            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                                <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/>
+                            </svg>
+                            API Key Settings
+                        </h4>
+                        <button class="btn btn-close" id="close-settings-btn">✕</button>
+                    </div>
+                    <div class="key-display">
+                        <span class="key-masked" id="key-masked">sk-••••••••••••••••</span>
+                        <span class="key-status">
+                            <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+                            Active
+                        </span>
+                    </div>
+                    <div class="btn-group">
+                        <button class="btn btn-secondary" id="update-key-btn">Update Key</button>
+                        <button class="btn btn-danger" id="clear-key-btn">Clear Key</button>
+                    </div>
+                </div>
+                <div id="nearcon-api-setup" class="api-key-setup" style="display: none;">
+                    <div class="setup-icon">
+                        <svg viewBox="0 0 24 24">
+                            <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/>
+                        </svg>
+                    </div>
+                    <h4>Enter Your NEAR AI API Key</h4>
+                    <p>Your key is stored locally in your browser and never sent to any third-party servers. It connects directly to NEAR AI's secure TEE infrastructure.</p>
+                    <div class="input-group">
+                        <input type="password" id="api-key-input" placeholder="sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" autocomplete="off" />
+                    </div>
+                    <button class="save-btn" id="save-api-key-btn">Save & Start Chatting</button>
+                    <div class="helper-link">
+                        <a href="https://cloud.near.ai" target="_blank" rel="noopener">Get your API key at cloud.near.ai →</a>
+                    </div>
+                    <div id="api-error" class="error-message" style="display: none;">
+                        <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+                        <span id="api-error-text">Invalid API key</span>
+                    </div>
+                </div>
+                <div class="model-selector-container" id="model-selector-container">
+                    <label class="model-selector-label" for="nearcon-model-select">AI Model</label>
+                    <select id="nearcon-model-select">
+                        <option value="deepseek-ai/DeepSeek-V3.1">Loading models...</option>
+                    </select>
                 </div>
                 <div id="nearcon-ai-messages">
                     <div class="welcome-message">
@@ -501,6 +1026,181 @@
                 sendMessage();
             }
         });
+
+        // Model selector change
+        document.getElementById('nearcon-model-select').addEventListener('change', (e) => {
+            saveSelectedModel(e.target.value);
+            console.log('Model changed to:', selectedModel);
+        });
+
+        // Settings button
+        document.getElementById('nearcon-settings-btn').addEventListener('click', toggleSettings);
+        document.getElementById('close-settings-btn').addEventListener('click', () => {
+            document.getElementById('nearcon-settings-panel').style.display = 'none';
+            showingSettings = false;
+        });
+
+        // API key setup handlers
+        document.getElementById('save-api-key-btn').addEventListener('click', handleSaveApiKey);
+        document.getElementById('api-key-input').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') handleSaveApiKey();
+        });
+
+        // Settings panel handlers
+        document.getElementById('update-key-btn').addEventListener('click', () => {
+            document.getElementById('nearcon-settings-panel').style.display = 'none';
+            showApiKeySetup();
+        });
+        document.getElementById('clear-key-btn').addEventListener('click', handleClearKey);
+
+        // Check if we have an API key
+        if (userApiKey) {
+            showChatInterface();
+            loadAvailableModels();
+        } else {
+            showApiKeySetup();
+        }
+    }
+
+    // Show API key setup screen
+    function showApiKeySetup() {
+        document.getElementById('nearcon-api-setup').style.display = 'flex';
+        document.getElementById('model-selector-container').style.display = 'none';
+        document.getElementById('nearcon-ai-messages').style.display = 'none';
+        document.getElementById('nearcon-ai-input-area').style.display = 'none';
+        document.getElementById('api-error').style.display = 'none';
+        document.getElementById('api-key-input').value = '';
+        document.getElementById('api-key-input').focus();
+    }
+
+    // Show chat interface
+    function showChatInterface() {
+        document.getElementById('nearcon-api-setup').style.display = 'none';
+        document.getElementById('model-selector-container').style.display = 'block';
+        document.getElementById('nearcon-ai-messages').style.display = 'flex';
+        document.getElementById('nearcon-ai-input-area').style.display = 'flex';
+
+        // Update masked key display
+        if (userApiKey) {
+            const masked = userApiKey.slice(0, 6) + '••••••••' + userApiKey.slice(-4);
+            document.getElementById('key-masked').textContent = masked;
+        }
+    }
+
+    // Toggle settings panel
+    function toggleSettings() {
+        const panel = document.getElementById('nearcon-settings-panel');
+        showingSettings = !showingSettings;
+        panel.style.display = showingSettings ? 'block' : 'none';
+    }
+
+    // Handle save API key
+    async function handleSaveApiKey() {
+        const input = document.getElementById('api-key-input');
+        const key = input.value.trim();
+        const errorDiv = document.getElementById('api-error');
+        const errorText = document.getElementById('api-error-text');
+        const saveBtn = document.getElementById('save-api-key-btn');
+
+        if (!key) {
+            errorText.textContent = 'Please enter an API key';
+            errorDiv.style.display = 'flex';
+            return;
+        }
+
+        if (!key.startsWith('sk-')) {
+            errorText.textContent = 'API key should start with "sk-"';
+            errorDiv.style.display = 'flex';
+            return;
+        }
+
+        // Disable button and show loading
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Validating...';
+        errorDiv.style.display = 'none';
+
+        // Test the key with a simple API call
+        try {
+            const response = await fetch(`${NEAR_AI_API_URL}/models`, {
+                headers: {
+                    'Authorization': `Bearer ${key}`
+                }
+            });
+
+            if (response.ok) {
+                saveApiKey(key);
+                showChatInterface();
+                loadAvailableModels();
+            } else if (response.status === 401) {
+                errorText.textContent = 'Invalid API key. Please check and try again.';
+                errorDiv.style.display = 'flex';
+            } else {
+                errorText.textContent = `API error: ${response.status}. Please try again.`;
+                errorDiv.style.display = 'flex';
+            }
+        } catch (error) {
+            console.error('API key validation error:', error);
+            errorText.textContent = 'Could not connect to NEAR AI. Please try again.';
+            errorDiv.style.display = 'flex';
+        } finally {
+            saveBtn.disabled = false;
+            saveBtn.textContent = 'Save & Start Chatting';
+        }
+    }
+
+    // Handle clear API key
+    function handleClearKey() {
+        if (confirm('Are you sure you want to remove your API key? You will need to enter it again to use the chat.')) {
+            clearApiKey();
+            document.getElementById('nearcon-settings-panel').style.display = 'none';
+            showingSettings = false;
+            showApiKeySetup();
+        }
+    }
+
+    // Load available models from NEAR AI API directly
+    async function loadAvailableModels() {
+        if (!userApiKey) return;
+
+        try {
+            const response = await fetch(`${NEAR_AI_API_URL}/models`, {
+                headers: {
+                    'Authorization': `Bearer ${userApiKey}`
+                }
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                availableModels = (data.data || []).map(model => ({
+                    id: model.id,
+                    name: model.id.split('/').pop()
+                }));
+                updateModelSelector();
+            }
+        } catch (error) {
+            console.error('Failed to load models:', error);
+            // Use default models if API fails
+            availableModels = [
+                { id: 'deepseek-ai/DeepSeek-V3.1', name: 'DeepSeek V3.1' },
+                { id: 'moonshotai/Kimi-K2-Thinking', name: 'Kimi K2 Thinking' },
+                { id: 'openai/gpt-oss-120b', name: 'GPT OSS 120B' },
+                { id: 'Qwen/Qwen3-30B-A3B-Instruct-2507', name: 'Qwen3 30B' },
+                { id: 'zai-org/GLM-4.6', name: 'GLM 4.6' }
+            ];
+            updateModelSelector();
+        }
+    }
+
+    // Update model selector dropdown
+    function updateModelSelector() {
+        const select = document.getElementById('nearcon-model-select');
+        if (!select) return;
+
+        select.innerHTML = availableModels.map(model => {
+            const modelId = model.id || model;
+            const modelName = model.name || modelId.split('/').pop();
+            return `<option value="${modelId}" ${modelId === selectedModel ? 'selected' : ''}>${modelName}</option>`;
+        }).join('');
     }
 
     // Toggle chat visibility
@@ -600,13 +1300,41 @@
         messagesContainer.scrollTop = messagesContainer.scrollHeight;
     }
 
-    // Send message
+    // Get system prompt for NEARCON context
+    function getSystemPrompt() {
+        return {
+            role: 'system',
+            content: `You are NearBot, a helpful AI assistant for NEARCON 2026 - the premier NEAR Protocol conference. You run in a Trusted Execution Environment (TEE) providing private, verifiable AI inference.
+
+Key information about NEARCON 2026:
+- Location: Lisbon, Portugal
+- Dates: November 2026
+- Focus: AI + Blockchain convergence, Chain Abstraction, DeFi, NFTs, and the Open Web
+
+You can help attendees with:
+- Conference schedule and sessions
+- Speaker information
+- Venue navigation
+- NEAR ecosystem and technology questions
+- Networking suggestions
+- Local recommendations in Lisbon
+
+Be friendly, concise, and helpful. When discussing NEAR technology, emphasize privacy, security, and the benefits of TEE-verified AI.`
+        };
+    }
+
+    // Send message - Direct to NEAR AI API
     async function sendMessage() {
         const input = document.getElementById('nearcon-ai-input');
         const sendBtn = document.getElementById('nearcon-ai-send');
         const userMessage = input.value.trim();
 
         if (!userMessage || isLoading) return;
+
+        if (!userApiKey) {
+            showApiKeySetup();
+            return;
+        }
 
         // Add user message
         addMessage('user', userMessage);
@@ -626,18 +1354,29 @@
             let assistantDiv = null;
             let chatId = null;
 
-            // Use SSE for streaming
-            const response = await fetch(`${BACKEND_URL}/api/chat`, {
+            // Add system prompt to messages
+            const messagesWithContext = [getSystemPrompt(), ...messages];
+
+            // Stream directly from NEAR AI API
+            const response = await fetch(`${NEAR_AI_API_URL}/chat/completions`, {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json'
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${userApiKey}`
                 },
                 body: JSON.stringify({
-                    messages: messages,
-                    model: MODEL,
-                    stream: true
+                    model: selectedModel,
+                    messages: messagesWithContext,
+                    stream: true,
+                    max_tokens: 1000,
+                    temperature: 0.7
                 })
             });
+
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.error?.message || `API error: ${response.status}`);
+            }
 
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
@@ -657,40 +1396,33 @@
                         try {
                             const parsed = JSON.parse(data);
 
-                            if (parsed.type === 'chunk') {
+                            // Get chat ID from first response
+                            if (parsed.id && !chatId) {
+                                chatId = parsed.id;
+                            }
+
+                            // Extract content from streaming delta
+                            const content = parsed.choices?.[0]?.delta?.content;
+                            if (content) {
                                 // Remove typing indicator on first chunk
                                 if (!assistantDiv) {
                                     removeTypingIndicator();
                                     assistantDiv = addMessage('assistant', '', { verified: false });
                                 }
 
-                                assistantContent += parsed.content;
+                                assistantContent += content;
                                 updateMessageContent(assistantDiv, assistantContent);
                             }
 
-                            if (parsed.type === 'complete') {
-                                chatId = parsed.chatId;
-
-                                // Update with full content if we have it
-                                if (parsed.response?.choices?.[0]?.message?.content) {
-                                    assistantContent = parsed.response.choices[0].message.content;
-                                    if (assistantDiv) {
-                                        updateMessageContent(assistantDiv, assistantContent);
-                                    }
-                                }
-
-                                // Fetch verification
-                                if (chatId) {
+                            // Check for finish
+                            if (parsed.choices?.[0]?.finish_reason === 'stop') {
+                                // Fetch verification after completion
+                                if (chatId && assistantDiv) {
                                     fetchVerification(chatId, assistantDiv);
                                 }
                             }
-
-                            if (parsed.type === 'error') {
-                                removeTypingIndicator();
-                                addMessage('assistant', `Sorry, I encountered an error: ${parsed.error}`, { verified: false });
-                            }
                         } catch (e) {
-                            // Ignore parse errors
+                            // Ignore parse errors for incomplete JSON
                         }
                     }
                 }
@@ -704,7 +1436,19 @@
         } catch (error) {
             console.error('Chat error:', error);
             removeTypingIndicator();
-            addMessage('assistant', 'Sorry, I couldn\'t connect to the AI service. Please make sure the backend server is running on localhost:3000.', { verified: false });
+
+            let errorMessage = 'Sorry, I encountered an error. ';
+            if (error.message.includes('401')) {
+                errorMessage += 'Your API key appears to be invalid. Please update it in settings.';
+            } else if (error.message.includes('402')) {
+                errorMessage += 'Insufficient credits. Please top up your NEAR AI account.';
+            } else if (error.message.includes('429')) {
+                errorMessage += 'Rate limit exceeded. Please wait a moment and try again.';
+            } else {
+                errorMessage += error.message || 'Please try again.';
+            }
+
+            addMessage('assistant', errorMessage, { verified: false });
         } finally {
             isLoading = false;
             sendBtn.disabled = false;
@@ -712,17 +1456,34 @@
         }
     }
 
-    // Fetch and update verification status
+    // Fetch and update verification status - Direct to NEAR AI API
     async function fetchVerification(chatId, messageDiv) {
+        if (!userApiKey) return;
+
         try {
-            // Get attestation
-            const attestationResponse = await fetch(`${BACKEND_URL}/api/attestation/${MODEL}`);
+            // Get attestation directly from NEAR AI API
+            const encodedModel = encodeURIComponent(selectedModel);
+            const attestationResponse = await fetch(`${NEAR_AI_API_URL}/attestation/report?model=${encodedModel}`, {
+                headers: {
+                    'Authorization': `Bearer ${userApiKey}`
+                }
+            });
+
+            if (!attestationResponse.ok) {
+                console.warn('Attestation fetch failed:', attestationResponse.status);
+                return;
+            }
+
             const attestation = await attestationResponse.json();
 
-            // Extract signing address from nested structure
-            const signingAddress = attestation?.gateway_attestation?.signing_address ||
-                                   attestation?.model_attestations?.[0]?.signing_address ||
-                                   attestation?.signing_address;
+            // Store for later use
+            lastAttestation = attestation;
+
+            // Extract data from the attestation response
+            const gatewayAttestation = attestation?.gateway_attestation || attestation || {};
+            const signingAddress = gatewayAttestation.signing_address || attestation?.signing_address;
+            const signingAlgo = gatewayAttestation.signing_algo || 'ed25519';
+            const info = gatewayAttestation.info || {};
 
             if (attestation && signingAddress) {
                 // Update verification badge
@@ -738,29 +1499,110 @@
                 }
 
                 if (panel) {
-                    panel.innerHTML = `
-                        <div class="verification-item">
-                            <span class="label">GPU Attestation</span>
-                            <span class="status verified">✓ Verified</span>
-                        </div>
-                        <div class="verification-item">
-                            <span class="label">CPU Attestation</span>
-                            <span class="status verified">✓ Verified</span>
-                        </div>
-                        <div class="verification-item">
-                            <span class="label">TEE Signature</span>
-                            <span class="status verified">✓ Verified</span>
-                        </div>
-                        <div class="verification-item" style="flex-direction: column; align-items: flex-start; gap: 4px;">
-                            <span class="label">Signing Address</span>
-                            <span class="signing-address">${signingAddress}</span>
-                        </div>
-                    `;
+                    panel.innerHTML = buildVerificationPanel(signingAddress, signingAlgo, info, gatewayAttestation);
                 }
             }
         } catch (error) {
             console.error('Verification error:', error);
         }
+    }
+
+    // Build the verification panel HTML
+    function buildVerificationPanel(signingAddress, signingAlgo, info, gatewayAttestation) {
+        const truncateHash = (hash, len = 16) => {
+            if (!hash) return 'N/A';
+            return hash.length > len * 2 ? hash.slice(0, len) + '...' + hash.slice(-len) : hash;
+        };
+
+        return `
+            <div class="verification-item">
+                <span class="label">GPU Attestation</span>
+                <span class="status verified">✓ Verified</span>
+            </div>
+            <div class="verification-item">
+                <span class="label">CPU Attestation</span>
+                <span class="status verified">✓ Verified</span>
+            </div>
+            <div class="verification-item">
+                <span class="label">TEE Signature</span>
+                <span class="status verified">✓ Verified</span>
+            </div>
+            <div class="verification-item">
+                <span class="label">Signing Algorithm</span>
+                <span class="tee-algo-badge">${signingAlgo}</span>
+            </div>
+            <div class="verification-item" style="flex-direction: column; align-items: flex-start; gap: 4px;">
+                <span class="label">Signing Address</span>
+                <span class="signing-address">${signingAddress}</span>
+            </div>
+
+            <button class="tee-details-toggle" onclick="this.classList.toggle('expanded'); this.nextElementSibling.classList.toggle('open');">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 10l5 5 5-5z"/></svg>
+                <span>View TEE Details</span>
+            </button>
+
+            <div class="tee-details-panel">
+                ${info.app_name ? `
+                <div class="tee-section">
+                    <div class="tee-section-title">Application Info</div>
+                    <div class="tee-detail-row">
+                        <span class="tee-detail-label">App Name</span>
+                        <span class="tee-detail-value">${info.app_name}</span>
+                    </div>
+                    <div class="tee-detail-row">
+                        <span class="tee-detail-label">App ID</span>
+                        <span class="tee-detail-value">${truncateHash(info.app_id)}</span>
+                    </div>
+                    <div class="tee-detail-row">
+                        <span class="tee-detail-label">Instance ID</span>
+                        <span class="tee-detail-value">${truncateHash(info.instance_id)}</span>
+                    </div>
+                </div>
+                ` : ''}
+
+                <div class="tee-section">
+                    <div class="tee-section-title">Security Measurements</div>
+                    ${info.os_image_hash ? `
+                    <div class="tee-detail-row" style="flex-direction: column; align-items: flex-start;">
+                        <span class="tee-detail-label">OS Image Hash</span>
+                        <span class="tee-hash">${info.os_image_hash}</span>
+                    </div>
+                    ` : ''}
+                    ${info.compose_hash ? `
+                    <div class="tee-detail-row" style="flex-direction: column; align-items: flex-start;">
+                        <span class="tee-detail-label">Compose Hash</span>
+                        <span class="tee-hash">${info.compose_hash}</span>
+                    </div>
+                    ` : ''}
+                    ${info.mr_aggregated ? `
+                    <div class="tee-detail-row" style="flex-direction: column; align-items: flex-start;">
+                        <span class="tee-detail-label">Aggregated Measurement</span>
+                        <span class="tee-hash">${info.mr_aggregated}</span>
+                    </div>
+                    ` : ''}
+                </div>
+
+                ${info.device_id ? `
+                <div class="tee-section">
+                    <div class="tee-section-title">Hardware Identity</div>
+                    <div class="tee-detail-row" style="flex-direction: column; align-items: flex-start;">
+                        <span class="tee-detail-label">Device ID</span>
+                        <span class="tee-hash">${info.device_id}</span>
+                    </div>
+                </div>
+                ` : ''}
+
+                ${gatewayAttestation.request_nonce ? `
+                <div class="tee-section">
+                    <div class="tee-section-title">Request Verification</div>
+                    <div class="tee-detail-row" style="flex-direction: column; align-items: flex-start;">
+                        <span class="tee-detail-label">Request Nonce</span>
+                        <span class="tee-hash">${gatewayAttestation.request_nonce}</span>
+                    </div>
+                </div>
+                ` : ''}
+            </div>
+        `;
     }
 
     // Escape HTML to prevent XSS

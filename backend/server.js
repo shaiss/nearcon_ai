@@ -33,10 +33,31 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Get cached attestation for a model
-app.get('/api/attestation/:model', async (req, res) => {
+// Get available models
+app.get('/api/models', async (req, res) => {
   try {
-    const { model } = req.params;
+    const models = await nearAIClient.getModels();
+    res.json({ models });
+  } catch (error) {
+    console.error('Models error:', error);
+    // Return default models on error
+    res.json({
+      models: [
+        { id: 'deepseek-ai/DeepSeek-V3.1', name: 'DeepSeek V3.1' },
+        { id: 'moonshotai/Kimi-K2-Thinking', name: 'Kimi K2 Thinking' },
+        { id: 'openai/gpt-oss-120b', name: 'GPT OSS 120B' },
+        { id: 'Qwen/Qwen3-30B-A3B-Instruct-2507', name: 'Qwen3 30B' },
+        { id: 'zai-org/GLM-4.6', name: 'GLM 4.6' }
+      ]
+    });
+  }
+});
+
+// Get cached attestation for a model
+app.get('/api/attestation/:model(*)', async (req, res) => {
+  try {
+    // Decode the model name in case it contains URL-encoded characters
+    const model = decodeURIComponent(req.params.model);
     const attestation = await nearAIClient.getCachedAttestation(model);
     res.json(attestation);
   } catch (error) {

@@ -123,7 +123,21 @@ class NearAIClient {
   }
 
   async getAttestation(model) {
-    return await this.makeRequest(`/attestation/report?model=${model}`);
+    return await this.makeRequest(`/attestation/report?model=${encodeURIComponent(model)}`);
+  }
+
+  // Get available models
+  async getModels() {
+    const response = await this.makeRequest('/models');
+    // Transform the response to a consistent format
+    if (response.data && Array.isArray(response.data)) {
+      return response.data.map(model => ({
+        id: model.id,
+        name: model.id.split('/').pop(),
+        owned_by: model.owned_by
+      }));
+    }
+    return [];
   }
 
   async getSignature(chatId, model) {
