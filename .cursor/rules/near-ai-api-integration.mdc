@@ -1,0 +1,525 @@
+---
+alwaysApply: true
+description: Complete guide to integrating with NEAR AI Cloud APIs including authentication, error handling, and best practices
+---
+
+# NEAR AI API Integration Guide
+
+## Authentication & API Keys
+
+### Getting Started
+1. **Create Account**: Visit [cloud.near.ai](https://cloud.near.ai) and connect GitHub/Google
+2. **Purchase Credits**: Navigate to Credits section and top up your account
+3. **Generate API Key**: Go to API Keys section and create a new key
+
+### API Key Security
+```javascript
+// ❌ NEVER hardcode API keys in source code
+const API_KEY = "your-api-key-here"; // WRONG!
+
+// ✅ Use environment variables
+const API_KEY = process.env.NEAR_AI_API_KEY;
+
+// ✅ Or secure secret management
+const API_KEY = await getSecret('NEAR_AI_API_KEY');
+```
+
+## Core API Endpoints
+
+### Base Configuration
+```javascript
+const NEAR_AI_CONFIG = {
+  baseURL: 'https://cloud-api.near.ai/v1',
+  apiKey: process.env.NEAR_AI_API_KEY,
+  timeout: 30000, // 30 seconds
+  retries: 3
+};
+```
+
+### Chat Completions API
+
+**Endpoint:** `POST /chat/completions`
+
+```javascript
+// Basic chat completion
+const response = await fetch(`${NEAR_AI_CONFIG.baseURL}/chat/completions`, {
+  method: 'POST',
+  headers: {
+    'Authorization': `Bearer ${NEAR_AI_CONFIG.apiKey}`,
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({
+    model: 'deepseek-chat-v3-0324',
+    messages: [
+      { role: 'user', content: 'Hello, how are you?' }
+    ],
+    max_tokens: 1000,
+    temperature: 0.7
+  })
+});
+
+const result = await response.json();
+console.log(result.choices[0].message.content);
+```
+
+### Model Attestation API
+
+**Endpoint:** `GET /attestation/report?model={model_name}`
+
+```javascript
+// Get hardware attestation for model
+async function getModelAttestation(modelName) {
+  const response = await fetch(
+    `${NEAR_AI_CONFIG.baseURL}/attestation/report?model=${modelName}`,
+    {
+      headers: {
+        'Authorization': `Bearer ${NEAR_AI_CONFIG.apiKey}`,
+        'Content-Type': 'application/json',
+      }
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(`Attestation request failed: ${response.status}`);
+  }
+
+  return await response.json();
+}
+
+// Usage
+const attestation = await getModelAttestation('deepseek-chat-v3-0324');
+console.log('TEE Signing Address:', attestation.signing_address);
+```
+
+### Signature Verification API
+
+**Endpoint:** `GET /signature/{chat_id}?model={model}&signing_algo=ecdsa`
+
+```javascript
+// Get cryptographic signature for chat
+async function getChatSignature(chatId, model) {
+  const response = await fetch(
+    `${NEAR_AI_CONFIG.baseURL}/signature/${chatId}?model=${model}&signing_algo=ecdsa`,
+    {
+      headers: {
+        'Authorization': `Bearer ${NEAR_AI_CONFIG.apiKey}`,
+        'Content-Type': 'application/json',
+      }
+    }
+  );
+
+  return await response.json();
+}
+```
+
+## Advanced Integration Patterns
+
+### Client SDK Class
+
+```javascript
+class NearAIClient {
+  constructor(apiKey, options = {}) {
+    this.apiKey = apiKey;
+    this.baseURL = options.baseURL || 'https://cloud-api.near.ai/v1';
+    this.timeout = options.timeout || 30000;
+    this.retries = options.retries || 3;
+  }
+
+  async makeRequest(endpoint, options = {}) {
+    const url = `${this.baseURL}${endpoint}`;
+    const config = {
+      headers: {
+        'Authorization': `Bearer ${this.apiKey}`,
+        'Content-Type': 'application/json',
+        ...options.headers
+      },
+      ...options
+    };
+
+    let lastError;
+    for (let i = 0; i < this.retries; i++) {
+      try {
+        const response = await fetch(url, config);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        return await response.json();
+      } catch (error) {
+        lastError = error;
+        if (i < this.retries - 1) {
+          await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
+        }
+      }
+    }
+    throw lastError;
+  }
+
+  async chat(messages, model = 'deepseek-chat-v3-0324', options = {}) {
+    const response = await this.makeRequest('/chat/completions', {
+      method: 'POST',
+      body: JSON.stringify({
+        model,
+        messages,
+        temperature: options.temperature || 0.7,
+        max_tokens: options.maxTokens || 1000,
+        stream: options.stream || false
+      })
+    });
+
+    return response;
+  }
+
+  async getAttestation(model) {
+    return this.makeRequest(`/attestation/report?model=${model}`);
+  }
+
+  async getSignature(chatId, model) {
+    return this.makeRequest(`/signature/${chatId}?model=${model}&signing_algo=ecdsa`);
+  }
+}
+
+// Usage
+const client = new NearAIClient(process.env.NEAR_AI_API_KEY);
+const result = await client.chat([
+  { role: 'user', content: 'Explain quantum computing' }
+]);
+```
+
+### Streaming Responses
+
+```javascript
+async function* streamChatCompletion(messages, model, client) {
+  const response = await fetch(`${client.baseURL}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${client.apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      messages,
+      stream: true
+    })
+  });
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      const chunk = decoder.decode(value);
+      const lines = chunk.split('\n');
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          const data = line.slice(6);
+          if (data === '[DONE]') break;
+
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.choices?.[0]?.delta?.content) {
+              yield parsed.choices[0].delta.content;
+            }
+          } catch (e) {
+            // Ignore malformed JSON lines
+          }
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+// Usage with streaming
+const client = new NearAIClient(process.env.NEAR_AI_API_KEY);
+const stream = streamChatCompletion(
+  [{ role: 'user', content: 'Tell me a story' }],
+  'deepseek-chat-v3-0324',
+  client
+);
+
+for await (const chunk of stream) {
+  process.stdout.write(chunk);
+}
+```
+
+## Error Handling & Resilience
+
+### Error Types
+
+```javascript
+class NearAIError extends Error {
+  constructor(message, code, statusCode) {
+    super(message);
+    this.name = 'NearAIError';
+    this.code = code;
+    this.statusCode = statusCode;
+  }
+}
+
+const ERROR_CODES = {
+  INVALID_API_KEY: 'invalid_api_key',
+  INSUFFICIENT_CREDITS: 'insufficient_credits',
+  MODEL_NOT_AVAILABLE: 'model_not_available',
+  RATE_LIMITED: 'rate_limited',
+  VERIFICATION_FAILED: 'verification_failed'
+};
+```
+
+### Comprehensive Error Handler
+
+```javascript
+async function handleNearAIRequest(requestFn) {
+  try {
+    return await requestFn();
+  } catch (error) {
+    if (error.message.includes('401')) {
+      throw new NearAIError('Invalid API key', ERROR_CODES.INVALID_API_KEY, 401);
+    }
+
+    if (error.message.includes('402')) {
+      throw new NearAIError('Insufficient credits', ERROR_CODES.INSUFFICIENT_CREDITS, 402);
+    }
+
+    if (error.message.includes('404')) {
+      throw new NearAIError('Model not available', ERROR_CODES.MODEL_NOT_AVAILABLE, 404);
+    }
+
+    if (error.message.includes('429')) {
+      throw new NearAIError('Rate limited', ERROR_CODES.RATE_LIMITED, 429);
+    }
+
+    if (error.message.includes('verification failed')) {
+      throw new NearAIError('Verification failed', ERROR_CODES.VERIFICATION_FAILED, 500);
+    }
+
+    // Network or other errors
+    throw new NearAIError(`Request failed: ${error.message}`, 'network_error', 0);
+  }
+}
+```
+
+### Retry Logic with Exponential Backoff
+
+```javascript
+class RetryHandler {
+  constructor(maxRetries = 3, baseDelay = 1000) {
+    this.maxRetries = maxRetries;
+    this.baseDelay = baseDelay;
+  }
+
+  async execute(operation) {
+    let lastError;
+
+    for (let i = 0; i <= this.maxRetries; i++) {
+      try {
+        return await operation();
+      } catch (error) {
+        lastError = error;
+
+        // Don't retry certain errors
+        if (error.code === ERROR_CODES.INVALID_API_KEY ||
+            error.code === ERROR_CODES.INSUFFICIENT_CREDITS) {
+          throw error;
+        }
+
+        if (i < this.maxRetries) {
+          const delay = this.baseDelay * Math.pow(2, i);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
+    }
+
+    throw lastError;
+  }
+}
+
+// Usage
+const retryHandler = new RetryHandler();
+const result = await retryHandler.execute(() =>
+  client.chat([{ role: 'user', content: 'Hello!' }])
+);
+```
+
+## Verification Integration
+
+### Automatic Verification Wrapper
+
+```javascript
+async function verifiedChat(client, messages, model, options = {}) {
+  // Make the request
+  const response = await client.chat(messages, model, options);
+  const chatId = response.id;
+
+  // Get verification data
+  const [attestation, signature] = await Promise.all([
+    client.getAttestation(model),
+    client.getSignature(chatId, model)
+  ]);
+
+  // Verify the response
+  const verification = await verifyNEARAInference(
+    chatId, model, { messages }, JSON.stringify(response), signature, attestation
+  );
+
+  return {
+    response,
+    verification,
+    attested: verification.verified
+  };
+}
+```
+
+## Rate Limiting & Quotas
+
+### Rate Limit Headers
+
+```javascript
+// Check rate limit status from response headers
+function getRateLimitInfo(response) {
+  return {
+    limit: response.headers.get('X-RateLimit-Limit'),
+    remaining: response.headers.get('X-RateLimit-Remaining'),
+    reset: response.headers.get('X-RateLimit-Reset'),
+    retryAfter: response.headers.get('Retry-After')
+  };
+}
+```
+
+### Adaptive Rate Limiting
+
+```javascript
+class AdaptiveRateLimiter {
+  constructor() {
+    this.requests = [];
+    this.windowMs = 60000; // 1 minute
+  }
+
+  canMakeRequest() {
+    const now = Date.now();
+    // Clean old requests
+    this.requests = this.requests.filter(time => now - time < this.windowMs);
+
+    // Check if under limit (e.g., 60 requests per minute)
+    return this.requests.length < 60;
+  }
+
+  recordRequest() {
+    this.requests.push(Date.now());
+  }
+
+  async waitForSlot() {
+    while (!this.canMakeRequest()) {
+      const oldestRequest = Math.min(...this.requests);
+      const waitTime = this.windowMs - (Date.now() - oldestRequest) + 100;
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+    }
+    this.recordRequest();
+  }
+}
+```
+
+## Monitoring & Observability
+
+### Request Metrics
+
+```javascript
+class NearAIMetrics {
+  constructor() {
+    this.metrics = {
+      totalRequests: 0,
+      successfulRequests: 0,
+      failedRequests: 0,
+      verificationFailures: 0,
+      averageResponseTime: 0,
+      creditsUsed: 0
+    };
+  }
+
+  recordRequest(duration, success, credits, verified = true) {
+    this.metrics.totalRequests++;
+    if (success) {
+      this.metrics.successfulRequests++;
+      this.metrics.creditsUsed += credits || 0;
+    } else {
+      this.metrics.failedRequests++;
+      if (!verified) {
+        this.metrics.verificationFailures++;
+      }
+    }
+
+    // Update average response time
+    this.metrics.averageResponseTime =
+      (this.metrics.averageResponseTime * (this.metrics.totalRequests - 1) + duration) /
+      this.metrics.totalRequests;
+  }
+
+  getReport() {
+    return {
+      ...this.metrics,
+      successRate: this.metrics.successfulRequests / this.metrics.totalRequests,
+      averageCreditsPerRequest: this.metrics.creditsUsed / this.metrics.successfulRequests
+    };
+  }
+}
+```
+
+### Health Check Function
+
+```javascript
+async function healthCheck(client) {
+  try {
+    // Simple test request
+    const response = await client.chat([
+      { role: 'user', content: 'Hello' }
+    ], 'deepseek-chat-v3-0324', { max_tokens: 10 });
+
+    // Verify the response
+    const verification = await verifiedChat(client, [
+      { role: 'user', content: 'Hello' }
+    ], 'deepseek-chat-v3-0324');
+
+    return {
+      status: 'healthy',
+      responseTime: Date.now() - startTime,
+      verified: verification.verified
+    };
+  } catch (error) {
+    return {
+      status: 'unhealthy',
+      error: error.message,
+      responseTime: Date.now() - startTime
+    };
+  }
+}
+```
+
+## Best Practices Summary
+
+### Security
+- ✅ Never commit API keys to version control
+- ✅ Use environment variables or secret management
+- ✅ Implement proper verification for all inferences
+- ✅ Monitor for key rotation and handle gracefully
+
+### Performance
+- ✅ Implement retry logic with exponential backoff
+- ✅ Cache attestation reports (24h TTL)
+- ✅ Use streaming for long responses
+- ✅ Implement rate limiting to respect quotas
+
+### Reliability
+- ✅ Comprehensive error handling for all error types
+- ✅ Health checks and monitoring
+- ✅ Graceful degradation when verification fails
+- ✅ Proper logging for debugging and auditing
+
+### Compliance
+- ✅ Log all verification results for audit trails
+- ✅ Implement proper data retention policies
+- ✅ Generate compliance reports as needed
+- ✅ Monitor SLA metrics and verification success rates

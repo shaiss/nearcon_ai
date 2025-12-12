@@ -1,0 +1,206 @@
+---
+description: NEAR AI Cloud demo UI/UX design rules - focus on frontend design with mocked backend
+globs: *.js,*.ts,*.jsx,*.tsx,*.html,*.css
+---
+
+# NEAR AI Cloud Demo - UI/UX Design Rules
+
+This demo showcases private and verifiable AI inference through Trusted Execution Environments (TEEs). Focus exclusively on creating an exceptional frontend experience while mocking all backend functionality.
+
+## 🎨 Design Philosophy
+
+### **Visual Identity**
+- **Brand Colors**: Use blues and teals to represent trust and security
+- **Typography**: Clean, modern sans-serif fonts for readability
+- **Icons**: Security-focused iconography (shields, locks, certificates)
+- **Layout**: Clean, spacious design with clear visual hierarchy
+
+### **User Experience Focus**
+- **Trust Building**: Emphasize security and verification through design
+- **Clarity**: Make complex concepts (TEE, attestation) understandable
+- **Feedback**: Clear status indicators for verification states
+- **Accessibility**: WCAG AA compliance for all users
+
+## 🔒 Security & Trust Visualization
+
+### **Verification Status Indicators**
+```css
+.verified-badge {
+  background: #10b981; /* Success green */
+  color: white;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 0.875rem;
+}
+
+.pending-badge {
+  background: #f59e0b; /* Warning amber */
+  color: white;
+}
+
+.failed-badge {
+  background: #ef4444; /* Error red */
+  color: white;
+}
+```
+
+### **Progress Indicators**
+- **Loading States**: Smooth animations during verification
+- **Progress Bars**: Show multi-step verification processes
+- **Status Icons**: Clear visual feedback for each verification step
+
+## 🗄️ Mock Data Strategy
+
+### **Local Storage for Persistence**
+```javascript
+// Demo chat history persistence
+const DEMO_STORAGE_KEY = 'near-ai-demo-chat';
+
+const saveChatHistory = (messages) => {
+  localStorage.setItem(DEMO_STORAGE_KEY, JSON.stringify(messages));
+};
+
+const loadChatHistory = () => {
+  const data = localStorage.getItem(DEMO_STORAGE_KEY);
+  return data ? JSON.parse(data) : getInitialDemoData();
+};
+
+const getInitialDemoData = () => {
+  return [
+    {
+      id: 1,
+      role: 'assistant',
+      content: 'Welcome to NEAR AI Cloud! I\'m a private AI assistant running in a Trusted Execution Environment.',
+      timestamp: new Date().toISOString(),
+      verified: true
+    }
+  ];
+};
+```
+
+### **Mock API Responses**
+```javascript
+// Mock verification responses
+const mockVerificationResponse = {
+  gpuVerified: true,
+  cpuVerified: true,
+  teeVerified: true,
+  attestationReport: {
+    signingAddress: '0x742d35Cc6635C053B0C0C5B8c5B8c5B8c5B8c5B8',
+    verificationStatus: 'verified'
+  }
+};
+
+// Mock chat responses
+const mockChatResponse = {
+  id: 'chat_' + Date.now(),
+  choices: [{
+    message: {
+      role: 'assistant',
+      content: 'I understand your question about private AI inference. Let me explain how Trusted Execution Environments work...'
+    }
+  }],
+  usage: {
+    prompt_tokens: 150,
+    completion_tokens: 200,
+    total_tokens: 350
+  }
+};
+```
+
+## 🚫 Backend Restrictions
+
+### **Prohibited Actions**
+- ❌ Real API calls to `cloud-api.near.ai`
+- ❌ External network requests
+- ❌ Real database connections
+- ❌ Authentication with real services
+
+### **Allowed Actions**
+- ✅ Local storage for data persistence
+- ✅ Mock API endpoints on localhost
+- ✅ Simulated loading states and errors
+- ✅ Demo data that survives page refreshes
+
+## 🎯 UI Enhancement Opportunities
+
+### **Interactive Elements**
+- **Verification Timeline**: Animated progress through verification steps
+- **Status Dashboard**: Real-time updates of verification status
+- **Chat Interface**: Modern messaging UI with typing indicators
+- **Settings Panel**: User preferences for demo customization
+
+### **Micro-Interactions**
+- **Hover Effects**: Subtle animations on interactive elements
+- **Loading Animations**: Smooth transitions during verification
+- **Success Feedback**: Celebratory animations for completed verifications
+- **Error States**: Clear, helpful error messaging
+
+### **Responsive Design**
+- **Mobile-First**: Design works perfectly on phones and tablets
+- **Touch-Friendly**: Large touch targets and swipe gestures
+- **Adaptive Layouts**: Content reflows beautifully across screen sizes
+
+## 🎭 Demo Scenarios
+
+### **Scenario 1: Hardware Verification**
+- Show animated progress through GPU → CPU → TEE verification
+- Display cryptographic proofs and attestation reports
+- Include interactive elements to explore verification details
+
+### **Scenario 2: Chat Interface**
+- Modern messaging interface with message history
+- Typing indicators and realistic response delays
+- Verification badges on each AI response
+
+### **Scenario 3: Settings & Customization**
+- Theme selection (light/dark modes)
+- Demo data reset functionality
+- Verification speed controls for testing
+
+## 🔧 Implementation Guidelines
+
+### **Component Structure**
+```
+components/
+├── VerificationPanel/     # Hardware verification status
+├── ChatInterface/        # Messaging UI
+├── StatusIndicators/     # Real-time status badges
+├── DemoControls/         # Settings and reset buttons
+└── LoadingStates/        # Progress indicators
+```
+
+### **State Management**
+```javascript
+// Centralized demo state
+const demoState = {
+  verificationStatus: {
+    gpu: 'pending',
+    cpu: 'pending',
+    tee: 'pending'
+  },
+  chatHistory: [],
+  settings: {
+    theme: 'light',
+    demoSpeed: 'normal'
+  }
+};
+```
+
+## ✅ Success Metrics
+
+- 🎨 **Beautiful Interface**: Modern, professional design
+- 🔒 **Trust Indicators**: Clear security status visualization
+- 📱 **Mobile Responsive**: Works perfectly on all devices
+- 🚀 **Performance**: Fast loading and smooth animations
+- ♿ **Accessible**: WCAG AA compliant
+- 💾 **Persistent**: Demo data survives browser sessions
+- 🔄 **Interactive**: Engaging user experience
+
+## 🎯 Focus Areas
+
+1. **Visual Design Excellence** - Create stunning interfaces
+2. **User Experience Flow** - Intuitive navigation and interactions
+3. **Trust & Security Visualization** - Make verification status clear
+4. **Performance Optimization** - Fast, responsive interactions
+5. **Accessibility Compliance** - Inclusive design for all users

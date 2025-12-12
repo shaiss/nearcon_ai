@@ -1,0 +1,167 @@
+---
+alwaysApply: true
+description: Technical details of NEAR AI's private inference system and TEE architecture
+---
+
+# NEAR AI Private Inference Architecture
+
+## Trusted Execution Environment (TEE) Foundation
+
+NEAR AI's private inference relies on **dual-layer TEE protection** combining Intel TDX for CPU isolation and NVIDIA TEE for GPU isolation.
+
+### Intel TDX (Trust Domain Extensions)
+- **Confidential Virtual Machines (CVMs)**: Hardware-enforced isolation at VM level
+- **Memory encryption**: All VM memory encrypted with hardware keys
+- **Secure boot**: Verified boot chain from hardware to workload
+- **Remote attestation**: Cryptographic proof of CVM integrity
+
+### NVIDIA TEE (Trusted Execution Environment)
+- **GPU-level isolation**: Protects GPU memory and computations
+- **Hardware security modules**: Unique per-GPU private keys
+- **Secure GPU contexts**: Isolated execution environments per workload
+- **GPU attestation reports**: Cryptographic proof of GPU security state
+
+## Private Inference Process Flow
+
+```mermaid
+graph TD
+    A[User Request] --> B[LLM Gateway - TEE]
+    B --> C[Request Routing]
+    C --> D[Private LLM Node - TEE]
+
+    D --> E[Model Execution]
+    E --> F[GPU Attestation Generation]
+    F --> G[CPU Attestation Generation]
+
+    G --> H[Cryptographic Signing]
+    H --> I[Response + Signatures]
+
+    D --> J[Hardware Identity Verification]
+    J --> K[Secure Key Derivation]
+    K --> H
+
+    I --> L[User Receives Response]
+```
+
+### Detailed Process Steps
+
+1. **Request Initiation**
+   - User sends API request to `https://cloud-api.near.ai/v1/chat/completions`
+   - Request routed through LLM Gateway operating in secure TEE
+
+2. **Secure Request Routing**
+   - LLM Gateway validates API key and routes to appropriate Private LLM Node
+   - Load balancing across multiple nodes based on model availability
+   - All routing decisions made within TEE environment
+
+3. **Secure Inference Execution**
+   - Model inference performed inside Private LLM Node TEE
+   - Both CPU (Intel TDX) and GPU (NVIDIA TEE) protections active
+   - Model weights and user data remain encrypted in memory
+
+4. **Attestation Generation**
+   - **GPU Attestation**: NVIDIA generates evidence of secure GPU state
+   - **CPU Attestation**: Intel TDX creates quote of CVM integrity
+   - Both reports include measurements of running software stack
+
+5. **Cryptographic Key Binding**
+   - Unique signing key pair generated inside each TEE
+   - Public key embedded in attestation reports
+   - Private key used exclusively within TEE for signing
+
+6. **Message Signing Process**
+   - Request body hashed with SHA-256
+   - Response body hashed with SHA-256
+   - Concatenated hash signed with TEE private key (ECDSA)
+   - Signature includes both request and response verification
+
+## Hardware Security Architecture
+
+### Private LLM Node Configuration
+```mermaid
+┌─────────────────────────────────────────────────────────┐
+│                Private LLM Node (8x H200)               │
+├─────────────────────────────────────────────────────────┤
+│  ┌─────────────────────────────────────────────────┐    │
+│  │            Intel TDX CVM                        │    │
+│  │  ┌─────────────────────────────────────────┐    │    │
+│  │  │         Private-ML-SDK                  │    │    │
+│  │  │  ┌─────────────────────────────────┐    │    │    │
+│  │  │  │     Model Execution Engine      │    │    │    │
+│  │  │  │  ┌─────────────────────────┐    │    │    │    │
+│  │  │  │  │   8x NVIDIA H200 GPUs   │    │    │    │    │
+│  │  │  │  │   with TEE Protection   │    │    │    │    │
+│  │  │  │  └─────────────────────────┘    │    │    │    │
+│  │  │  └─────────────────────────────────┘    │    │    │
+│  │  └─────────────────────────────────────────┘    │    │
+│  └─────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Key Security Components
+
+#### Hardware Root of Trust
+- **Intel TDX Root of Trust**: CPU microcode and firmware measurements
+- **NVIDIA Hardware Root of Trust**: GPU silicon-embedded private keys
+- **Secure Boot Chain**: Verified from hardware to application layer
+
+#### Cryptographic Operations
+- **Key Generation**: Unique ECDSA key pairs per TEE instance
+- **Attestation Signing**: Hardware signs reports with unique device keys
+- **Message Signing**: TEE private key signs request/response hashes
+- **Verification Chain**: Public keys → Attestation → Message signatures
+
+## Threat Model Protection
+
+### Protected Against
+- **Malicious Infrastructure Providers**: TEE prevents host system access to VM memory
+- **Network Attacks**: End-to-end encryption protects data in transit
+- **Model Extraction**: Model weights encrypted and isolated in GPU TEE
+- **Result Tampering**: Cryptographic signatures ensure response integrity
+- **Side-Channel Attacks**: Hardware isolation prevents cache timing attacks
+
+### Verification Capabilities
+- **Hardware Verification**: Independent validation via NVIDIA RAS and Intel services
+- **Software Verification**: Attestation reports include software measurements
+- **Key Verification**: Signing keys cryptographically bound to hardware
+- **Message Verification**: Every inference signed and verifiable
+
+## Performance Characteristics
+
+### Hardware Specifications
+- **CPU**: Intel processors with TDX support (4th Gen Xeon or newer)
+- **GPU**: 8x NVIDIA H200 GPUs per node (Hopper architecture)
+- **Memory**: High-bandwidth memory with TEE encryption support
+- **Network**: High-speed interconnect for multi-node coordination
+
+### Performance Optimizations
+- **Batch Processing**: Optimized for high-throughput inference workloads
+- **Memory Management**: Efficient TEE memory usage patterns
+- **Load Balancing**: Intelligent request distribution across nodes
+- **Caching**: Secure caching of frequently used model components
+
+## Integration Considerations
+
+### API Endpoints
+```typescript
+// Model Attestation
+GET /v1/attestation/report?model={model_name}
+
+// Chat Completions
+POST /v1/chat/completions
+
+// Signature Verification
+GET /v1/signature/{chat_id}?model={model}&signing_algo=ecdsa
+```
+
+### Verification Libraries
+- **NVIDIA Attestation**: Use official NVIDIA Remote Attestation Service
+- **Intel TDX**: Verify quotes at https://proof.t16z.com/
+- **ECDSA Verification**: Use ethers.js or similar crypto libraries
+- **Hash Functions**: SHA-256 for message hashing
+
+### Best Practices
+- **Always verify attestations** before trusting inference results
+- **Cache attestation reports** for performance (valid for session duration)
+- **Implement retry logic** for attestation verification failures
+- **Monitor TEE health** through attestation report freshness

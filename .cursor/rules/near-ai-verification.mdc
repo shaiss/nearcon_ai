@@ -1,0 +1,374 @@
+---
+alwaysApply: true
+description: Complete guide to NEAR AI verification processes including attestation and signature verification
+---
+
+# NEAR AI Verification Guide
+
+NEAR AI provides **end-to-end verifiability** through cryptographic proofs. Every AI inference can be verified to have occurred in a trusted TEE environment without tampering.
+
+## Verification Architecture
+
+### Three-Layer Verification Chain
+
+```mermaid
+graph TD
+    A[Hardware Root of Trust] --> B[TEE Attestation]
+    B --> C[Signing Key Binding]
+    C --> D[Message Signing]
+    D --> E[End-to-End Verification]
+
+    A --> F[NVIDIA GPU Keys]
+    A --> G[Intel TDX Keys]
+    F --> B
+    G --> B
+```
+
+1. **Hardware Root of Trust**: Unique cryptographic keys burned into silicon
+2. **TEE Attestation**: Hardware proves secure environment configuration
+3. **Signing Key Binding**: TEE public keys embedded in attestation reports
+4. **Message Signing**: Every request/response signed with TEE private key
+5. **End-to-End Verification**: Complete cryptographic verification chain
+
+## Step 1: Model Attestation Verification
+
+### Request Model Attestation
+
+```bash
+# Get attestation report for specific model
+curl "https://cloud-api.near.ai/v1/attestation/report?model=deepseek-chat-v3-0324" \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+**Response includes:**
+```json
+{
+  "signing_address": "0xCaAA4842758658A85785Ad15367a700C601ffEA5",
+  "nvidia_payload": "...",     // Base64 encoded GPU attestation
+  "intel_quote": "...",        // Base64 encoded CPU attestation
+  "all_attestations": [...]    // All GPU nodes in network
+}
+```
+
+### Verify GPU Attestation (NVIDIA)
+
+```bash
+# Send NVIDIA payload to NVIDIA Remote Attestation Service
+curl -X POST "https://nras.attestation.nvidia.com/v3/attest/gpu" \
+  -H "Content-Type: application/json" \
+  -d @nvidia_payload.json
+```
+
+**Verification checks:**
+- ✅ Hardware identity verification
+- ✅ Firmware & software measurements
+- ✅ Security configuration state
+- ✅ GPU unique key signature validation
+- ✅ Overall attestation result
+
+### Verify CPU Attestation (Intel TDX)
+
+```bash
+# Use Intel TDX quote at attestation explorer
+# Visit: https://proof.t16z.com/
+# Paste the intel_quote value
+```
+
+**Verification confirms:**
+- ✅ TDX quote authenticity
+- ✅ CVM integrity measurements
+- ✅ Secure boot chain validation
+
+## Step 2: Message Signature Verification
+
+### Generate Message Hashes
+
+**Request Hash (SHA-256):**
+```javascript
+const requestBody = JSON.stringify({
+  "messages": [{"role": "user", "content": "Hello!"}],
+  "model": "deepseek-chat-v3-0324"
+});
+const requestHash = crypto.createHash('sha256').update(requestBody).digest('hex');
+```
+
+**Response Hash (SHA-256):**
+```javascript
+const responseBody = await fetch('https://cloud-api.near.ai/v1/chat/completions', {
+  method: 'POST',
+  headers: { 'Authorization': `Bearer ${API_KEY}` },
+  body: requestBody
+}).then(r => r.text());
+const responseHash = crypto.createHash('sha256').update(responseBody).digest('hex');
+```
+
+### Concatenated Message Format
+
+```javascript
+const message = `${requestHash}:${responseHash}`;
+const signature = "0x..."; // From signature API
+const signingAddress = "0x..."; // From attestation
+```
+
+### Verify ECDSA Signature
+
+```javascript
+import { ethers } from 'ethers';
+
+// Verify signature matches expected signing address
+const recoveredAddress = ethers.verifyMessage(message, signature);
+const isValid = recoveredAddress.toLowerCase() === signingAddress.toLowerCase();
+
+console.log("Message verified:", isValid);
+```
+
+## Step 3: Complete Verification Workflow
+
+### Automated Verification Function
+
+```javascript
+async function verifyNEARAInference(chatId, model, requestBody, responseBody) {
+  // 1. Get signature for chat
+  const sigResponse = await fetch(
+    `https://cloud-api.near.ai/v1/signature/${chatId}?model=${model}&signing_algo=ecdsa`,
+    { headers: { 'Authorization': `Bearer ${API_KEY}` }}
+  );
+  const { signature, signing_address, text } = await sigResponse.json();
+
+  // 2. Generate message hash
+  const requestHash = crypto.createHash('sha256').update(JSON.stringify(requestBody)).digest('hex');
+  const responseHash = crypto.createHash('sha256').update(responseBody).digest('hex');
+  const expectedMessage = `${requestHash}:${responseHash}`;
+
+  // 3. Verify message matches signature
+  if (text !== expectedMessage) {
+    throw new Error('Message hash mismatch');
+  }
+
+  // 4. Verify ECDSA signature
+  const recoveredAddress = ethers.verifyMessage(text, signature);
+  if (recoveredAddress.toLowerCase() !== signing_address.toLowerCase()) {
+    throw new Error('Signature verification failed');
+  }
+
+  // 5. Verify attestation (cached for performance)
+  const attestation = await getCachedAttestation(model);
+  if (signing_address !== attestation.signing_address) {
+    throw new Error('Signing address not in attestation');
+  }
+
+  return { verified: true, attestation, signature };
+}
+```
+
+## Verification Best Practices
+
+### Caching Strategy
+
+```javascript
+// Cache attestations for 24 hours (typical TEE session duration)
+const ATTESTATION_CACHE_TTL = 24 * 60 * 60 * 1000;
+
+async function getCachedAttestation(model) {
+  const cacheKey = `attestation_${model}`;
+  const cached = cache.get(cacheKey);
+
+  if (cached && Date.now() - cached.timestamp < ATTESTATION_CACHE_TTL) {
+    return cached.data;
+  }
+
+  const response = await fetch(
+    `https://cloud-api.near.ai/v1/attestation/report?model=${model}`,
+    { headers: { 'Authorization': `Bearer ${API_KEY}` }}
+  );
+
+  const attestation = await response.json();
+  cache.set(cacheKey, { data: attestation, timestamp: Date.now() });
+
+  return attestation;
+}
+```
+
+### Error Handling
+
+```javascript
+async function safeVerifyInference(chatId, model, requestBody, responseBody) {
+  try {
+    return await verifyNEARAInference(chatId, model, requestBody, responseBody);
+  } catch (error) {
+    if (error.message.includes('Signature verification failed')) {
+      // Critical security issue - inference may be compromised
+      await alertSecurityTeam(error);
+      throw new Error('CRITICAL: Inference verification failed - possible attack');
+    }
+
+    if (error.message.includes('Message hash mismatch')) {
+      // Data integrity issue
+      throw new Error('Data integrity check failed');
+    }
+
+    // Network or temporary issues - can retry
+    throw new Error(`Verification failed: ${error.message}`);
+  }
+}
+```
+
+## Advanced Verification Patterns
+
+### Batch Verification
+
+```javascript
+// Verify multiple inferences efficiently
+async function verifyBatchInferences(inferences) {
+  const results = await Promise.allSettled(
+    inferences.map(inf => verifyNEARAInference(
+      inf.chatId, inf.model, inf.request, inf.response
+    ))
+  );
+
+  const verified = results.filter(r => r.status === 'fulfilled');
+  const failed = results.filter(r => r.status === 'rejected');
+
+  return { verified: verified.length, failed: failed.length, details: results };
+}
+```
+
+### Real-time Verification Stream
+
+```javascript
+// For streaming responses, verify chunks as they arrive
+async function verifyStreamingInference(responseStream, model) {
+  const reader = responseStream.getReader();
+  const chunks = [];
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    chunks.push(new TextDecoder().decode(value));
+
+    // Verify complete messages every N chunks
+    if (chunks.length % 10 === 0) {
+      const partialResponse = chunks.join('');
+      await verifyPartialResponse(partialResponse, model);
+    }
+  }
+
+  return chunks.join('');
+}
+```
+
+## Troubleshooting Verification Issues
+
+### Common Issues
+
+**"Signature verification failed"**
+- Check if you're using the correct signing algorithm (ecdsa)
+- Verify the signing address matches the attestation report
+- Ensure message hash exactly matches the signature text
+
+**"Attestation verification failed"**
+- NVIDIA attestation service may be temporarily unavailable
+- Intel TDX quote format may have changed
+- Check if attestation has expired (cached too long)
+
+**"Message hash mismatch"**
+- Ensure request/response bodies are exact byte-for-byte matches
+- Check for trailing newlines in streaming responses
+- Verify JSON formatting is identical (no whitespace differences)
+
+### Debug Mode
+
+```javascript
+// Enable detailed logging for debugging
+const DEBUG_VERIFICATION = process.env.NODE_ENV === 'development';
+
+function debugLog(step, data) {
+  if (DEBUG_VERIFICATION) {
+    console.log(`[Verification:${step}]`, data);
+  }
+}
+
+// Use throughout verification process
+debugLog('attestation-fetch', { model, timestamp: Date.now() });
+debugLog('signature-verify', { message, signature, recoveredAddress });
+```
+
+## Security Considerations
+
+### Verification Timing
+- **Attestation verification**: Can be cached for performance (24h typical)
+- **Signature verification**: Must be done for every inference
+- **Real-time verification**: Critical for high-security applications
+
+### Key Rotation
+- TEE signing keys may rotate periodically
+- Monitor attestation reports for key changes
+- Implement key rotation detection and alerts
+
+### Compliance Requirements
+- **Audit trails**: Log all verification results
+- **Compliance reporting**: Generate verification reports for regulators
+- **SLA monitoring**: Track verification success rates
+
+## Integration Examples
+
+### Web Application
+
+```javascript
+// React hook for verified AI inference
+function useVerifiedAI() {
+  const [verification, setVerification] = useState(null);
+
+  const queryAI = async (messages, model) => {
+    const response = await fetch('/api/ai-query', {
+      method: 'POST',
+      body: JSON.stringify({ messages, model })
+    });
+
+    const { chatId, response: aiResponse } = await response.json();
+
+    // Verify the inference
+    const verification = await verifyNEARAInference(
+      chatId, model, { messages }, aiResponse
+    );
+
+    setVerification(verification);
+    return { response: aiResponse, verified: verification.verified };
+  };
+
+  return { queryAI, verification };
+}
+```
+
+### Server-side Verification
+
+```javascript
+// Express middleware for automatic verification
+app.use('/api/ai', async (req, res, next) => {
+  const originalJson = res.json;
+  res.json = function(data) {
+    // Override to add verification
+    if (data.chatId && req.body.model) {
+      verifyNEARAInference(
+        data.chatId,
+        req.body.model,
+        req.body,
+        JSON.stringify(data)
+      ).then(verification => {
+        data._verification = verification;
+        return originalJson.call(this, data);
+      }).catch(error => {
+        console.error('Verification failed:', error);
+        data._verification = { error: error.message };
+        return originalJson.call(this, data);
+      });
+    } else {
+      return originalJson.call(this, data);
+    }
+  };
+  next();
+});
+```
+
+This comprehensive verification system ensures that every NEAR AI inference can be cryptographically proven to have occurred in a trusted, untampered environment.

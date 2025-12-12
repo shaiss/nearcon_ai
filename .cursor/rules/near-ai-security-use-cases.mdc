@@ -1,0 +1,502 @@
+---
+alwaysApply: true
+description: Security considerations and practical use cases for NEAR AI Cloud platform
+---
+
+# NEAR AI Security & Use Cases
+
+## Security Considerations
+
+### Threat Model Protection
+
+NEAR AI's TEE-based architecture protects against critical threats:
+
+#### Infrastructure Attacks
+- **Malicious Cloud Providers**: TEE prevents host system access to VM memory
+- **Hypervisor Compromise**: Hardware-enforced isolation at VM boundary
+- **Side-Channel Attacks**: Memory encryption prevents cache timing attacks
+- **Physical Attacks**: Tamper-resistant hardware security modules
+
+#### Network & Communication
+- **Man-in-the-Middle**: End-to-end encryption throughout request lifecycle
+- **Request Interception**: All data encrypted in transit and at rest
+- **API Key Compromise**: Bearer token authentication with short-lived sessions
+
+#### Model & Data Security
+- **Model Extraction**: Model weights encrypted and isolated in GPU TEE
+- **Prompt Injection**: Input validation and sanitization within TEE
+- **Output Manipulation**: Cryptographic signatures ensure response integrity
+- **Data Leakage**: Zero persistent storage of user prompts or responses
+
+### Verification Security
+
+#### Cryptographic Chain of Trust
+```
+Hardware Root of Trust → TEE Attestation → Signing Key → Message Signature
+```
+
+- **Hardware Verification**: Independent validation via NVIDIA RAS and Intel TDX
+- **Software Verification**: Attestation reports include software measurements
+- **Key Binding**: TEE public keys cryptographically linked to hardware identity
+- **Message Verification**: Every inference signed with TEE private key (ECDSA)
+
+#### Verification Best Practices
+
+```javascript
+// Always verify before trusting results
+async function secureAIQuery(client, messages, model) {
+  // 1. Get current attestation (cached OK for 24h)
+  const attestation = await getCachedAttestation(model);
+
+  // 2. Make the request
+  const response = await client.chat(messages, model);
+
+  // 3. Get signature (must be done within 5 minutes)
+  const signature = await client.getSignature(response.id, model);
+
+  // 4. Verify the complete chain
+  const verification = await verifyCompleteChain(
+    response, signature, attestation
+  );
+
+  if (!verification.verified) {
+    throw new Error('CRITICAL: AI response verification failed');
+  }
+
+  return { response, verification: verification.details };
+}
+```
+
+## Use Cases & Applications
+
+### Healthcare & Medical AI
+
+**Privacy Requirements**: HIPAA compliance, patient data protection
+
+```javascript
+// Medical diagnosis with privacy preservation
+const medicalQuery = {
+  messages: [
+    {
+      role: 'user',
+      content: `Analyze this patient data for diagnosis:
+      Symptoms: ${patientSymptoms}
+      History: ${medicalHistory}
+      Labs: ${labResults}`
+    }
+  ],
+  model: 'medical-llama-13b'
+};
+
+// Verify healthcare AI responses for legal compliance
+const result = await verifiedMedicalAI(medicalQuery);
+if (result.verified) {
+  // Safe to use in treatment decisions
+  updatePatientRecord(result.response);
+}
+```
+
+**Security Benefits**:
+- Patient data never visible to infrastructure providers
+- Diagnosis decisions cryptographically verifiable
+- Audit trail for regulatory compliance
+- Protection against healthcare data breaches
+
+### Financial Services
+
+**Privacy Requirements**: GDPR, financial regulation compliance
+
+```javascript
+// Risk assessment with confidential data
+const riskAssessment = {
+  messages: [
+    {
+      role: 'user',
+      content: `Analyze portfolio risk for client:
+      Holdings: ${confidentialHoldings}
+      Risk Tolerance: ${riskProfile}
+      Market Data: ${currentMarketData}`
+    }
+  ],
+  model: 'financial-gpt-4'
+};
+
+// Financial AI with regulatory verification
+const analysis = await verifiedFinancialAI(riskAssessment);
+auditLog('financial-analysis', {
+  clientId: client.id,
+  timestamp: Date.now(),
+  verificationHash: analysis.verification.hash,
+  complianceStatus: 'verified'
+});
+```
+
+**Security Benefits**:
+- Trading algorithms and positions remain confidential
+- Financial advice decisions are verifiable for compliance
+- Protection against market manipulation via AI
+- Audit trails for regulatory reporting
+
+### Legal & Compliance
+
+**Privacy Requirements**: Attorney-client privilege, case confidentiality
+
+```javascript
+// Legal document analysis
+const legalAnalysis = {
+  messages: [
+    {
+      role: 'user',
+      content: `Review contract for compliance issues:
+      Contract Text: ${confidentialContract}
+      Jurisdiction: ${jurisdiction}
+      Client Requirements: ${clientRequirements}`
+    }
+  ],
+  model: 'legal-bert-large'
+};
+
+// Verifiable legal AI for court admissibility
+const review = await verifiedLegalAI(legalAnalysis);
+if (review.verified) {
+  // Can be submitted as evidence with cryptographic proof
+  submitToCourt(review.response, review.verification.proof);
+}
+```
+
+**Security Benefits**:
+- Attorney-client communications remain privileged
+- Legal analysis decisions are court-admissible with verification
+- Protection against legal document tampering
+- Compliance with legal technology regulations
+
+### Research & Academia
+
+**Privacy Requirements**: Research data protection, intellectual property
+
+```javascript
+// Academic research with sensitive datasets
+const researchQuery = {
+  messages: [
+    {
+      role: 'user',
+      content: `Analyze research data for patterns:
+      Dataset: ${sensitiveResearchData}
+      Hypothesis: ${researchHypothesis}
+      Methodology: ${researchMethods}`
+    }
+  ],
+  model: 'research-llama-70b'
+};
+
+// Verifiable research AI for peer review
+const findings = await verifiedResearchAI(researchQuery);
+publishPaper({
+  findings: findings.response,
+  verification: findings.verification,
+  reproducibility: 'cryptographically-verified'
+});
+```
+
+**Security Benefits**:
+- Research data remains confidential during analysis
+- Research findings are verifiable for reproducibility
+- Protection against research data leaks
+- Academic integrity through cryptographic proof
+
+## Enterprise Integration Patterns
+
+### Zero-Trust AI Architecture
+
+```javascript
+class ZeroTrustAIService {
+  constructor(client, securityPolicy) {
+    this.client = client;
+    this.policy = securityPolicy;
+  }
+
+  async executeVerifiedQuery(query, model) {
+    // 1. Pre-flight security checks
+    if (!this.policy.isModelApproved(model)) {
+      throw new Error(`Model ${model} not approved by security policy`);
+    }
+
+    // 2. Execute with verification
+    const result = await secureAIQuery(this.client, query, model);
+
+    // 3. Post-execution validation
+    if (!this.policy.meetsSecurityRequirements(result.verification)) {
+      throw new Error('AI response failed security validation');
+    }
+
+    // 4. Log for audit trail
+    this.auditLog(result);
+
+    return result;
+  }
+}
+```
+
+### Multi-Tenant AI Service
+
+```javascript
+class MultiTenantAIService {
+  constructor(client, tenantManager) {
+    this.client = client;
+    this.tenants = tenantManager;
+  }
+
+  async processTenantRequest(tenantId, query, model) {
+    // 1. Verify tenant permissions
+    const tenant = await this.tenants.getTenant(tenantId);
+    if (!tenant.permissions.includes('ai-access')) {
+      throw new Error('Tenant does not have AI access permissions');
+    }
+
+    // 2. Apply tenant-specific policies
+    const sanitizedQuery = this.applyTenantPolicies(query, tenant);
+
+    // 3. Execute with tenant isolation
+    const result = await this.client.verifiedChat(
+      sanitizedQuery,
+      model,
+      { tenantId } // Pass tenant context
+    );
+
+    // 4. Verify tenant data isolation
+    if (!this.verifyTenantIsolation(result, tenantId)) {
+      throw new Error('Tenant data isolation verification failed');
+    }
+
+    return result;
+  }
+}
+```
+
+## Compliance & Audit Requirements
+
+### GDPR Compliance
+
+```javascript
+// GDPR-compliant AI processing
+async function gdprCompliantAI(tenantId, query, model) {
+  // 1. Verify data processing consent
+  const consent = await verifyDataConsent(tenantId, 'ai-processing');
+  if (!consent.granted) {
+    throw new Error('GDPR consent not granted for AI processing');
+  }
+
+  // 2. Execute with privacy preservation
+  const result = await verifiedPrivateAI(query, model);
+
+  // 3. Log processing activity
+  gdprLog('ai-processing', {
+    tenantId,
+    timestamp: Date.now(),
+    purpose: 'legitimate-interest',
+    verification: result.verification.hash,
+    retention: 'session-only'
+  });
+
+  return result;
+}
+```
+
+### SOX Compliance (Financial Reporting)
+
+```javascript
+// SOX-compliant financial AI
+async function soxCompliantFinancialAI(query, model) {
+  // 1. Execute with enhanced verification
+  const result = await verifiedFinancialAI(query, model);
+
+  // 2. Create audit trail
+  const auditRecord = {
+    timestamp: Date.now(),
+    user: currentUser(),
+    query: query.purpose,
+    model: model,
+    verificationHash: result.verification.hash,
+    soxControls: [
+      'access-control-verified',
+      'integrity-verified',
+      'non-repudiation-confirmed'
+    ]
+  };
+
+  // 3. Store in tamper-proof audit log
+  await immutableAuditLog(auditRecord);
+
+  return result;
+}
+```
+
+## Performance & Cost Optimization
+
+### Caching Strategy
+
+```javascript
+class AIOptimizationService {
+  constructor(client) {
+    this.client = client;
+    this.attestationCache = new TimeBasedCache(24 * 60 * 60 * 1000); // 24h
+    this.responseCache = new ContentBasedCache(); // Cache identical queries
+  }
+
+  async optimizedQuery(query, model, useCache = true) {
+    // 1. Check response cache first
+    if (useCache) {
+      const cached = await this.responseCache.get(query);
+      if (cached && cached.verified) {
+        return cached;
+      }
+    }
+
+    // 2. Use cached attestation
+    const attestation = await this.attestationCache.get(model);
+
+    // 3. Execute with verification
+    const result = await secureAIQuery(this.client, query, model, attestation);
+
+    // 4. Cache successful results
+    if (result.verified) {
+      await this.responseCache.set(query, result);
+    }
+
+    return result;
+  }
+}
+```
+
+### Batch Processing
+
+```javascript
+// Process multiple queries efficiently
+async function batchVerifiedAI(queries, model) {
+  // 1. Single attestation for all queries
+  const attestation = await getCachedAttestation(model);
+
+  // 2. Batch execute queries
+  const responses = await Promise.all(
+    queries.map(query => client.chat(query, model))
+  );
+
+  // 3. Batch verify signatures
+  const verifications = await Promise.all(
+    responses.map(response => verifyResponse(response, attestation))
+  );
+
+  // 4. Return results with verification status
+  return responses.map((response, i) => ({
+    response,
+    verified: verifications[i].verified,
+    verification: verifications[i].details
+  }));
+}
+```
+
+## Monitoring & Alerting
+
+### Security Monitoring
+
+```javascript
+class AISecurityMonitor {
+  constructor() {
+    this.metrics = {
+      verificationFailures: 0,
+      attestationFailures: 0,
+      suspiciousActivity: 0,
+      lastIncident: null
+    };
+  }
+
+  async monitorAIRequest(result) {
+    // 1. Check verification success rate
+    if (!result.verified) {
+      this.metrics.verificationFailures++;
+      await this.alertSecurityTeam('Verification failure detected');
+    }
+
+    // 2. Monitor attestation health
+    if (result.verification.attestationExpired) {
+      this.metrics.attestationFailures++;
+      await this.alertAdmins('Attestation expired');
+    }
+
+    // 3. Detect suspicious patterns
+    if (await this.detectSuspiciousActivity(result)) {
+      this.metrics.suspiciousActivity++;
+      await this.alertSecurityTeam('Suspicious AI activity detected');
+    }
+  }
+}
+```
+
+### Performance Monitoring
+
+```javascript
+// Monitor AI service performance
+function monitorAIPerformance() {
+  const metrics = {
+    responseTime: [],
+    throughput: [],
+    errorRate: [],
+    verificationTime: []
+  };
+
+  // Track each request
+  client.on('request', (request) => {
+    const startTime = Date.now();
+
+    request.on('response', (response) => {
+      const duration = Date.now() - startTime;
+      metrics.responseTime.push(duration);
+
+      if (response.verified) {
+        metrics.verificationTime.push(response.verification.duration);
+      }
+    });
+  });
+
+  // Generate performance reports
+  setInterval(() => {
+    const report = {
+      averageResponseTime: average(metrics.responseTime),
+      p95ResponseTime: percentile(metrics.responseTime, 95),
+      requestsPerSecond: metrics.throughput.length / 60,
+      errorRate: metrics.errorRate.length / metrics.responseTime.length,
+      averageVerificationTime: average(metrics.verificationTime)
+    };
+
+    console.log('AI Performance Report:', report);
+  }, 60000);
+}
+```
+
+## Best Practices Summary
+
+### Security First
+- ✅ Always verify attestations before trusting AI responses
+- ✅ Implement zero-trust architecture for AI services
+- ✅ Monitor for verification failures and suspicious activity
+- ✅ Maintain comprehensive audit trails for compliance
+
+### Performance Optimization
+- ✅ Cache attestation reports (24h TTL) for better performance
+- ✅ Use batch processing for multiple similar queries
+- ✅ Implement intelligent caching for identical queries
+- ✅ Monitor performance metrics and optimize bottlenecks
+
+### Compliance & Governance
+- ✅ Implement proper data retention and deletion policies
+- ✅ Generate compliance reports for regulatory requirements
+- ✅ Maintain audit trails for all AI interactions
+- ✅ Regular security assessments and penetration testing
+
+### Operational Excellence
+- ✅ Comprehensive error handling and graceful degradation
+- ✅ Health checks and monitoring for service reliability
+- ✅ Automated alerting for security and performance issues
+- ✅ Regular updates and security patches
+
+This comprehensive approach ensures that NEAR AI deployments are secure, compliant, performant, and maintainable in production environments.
